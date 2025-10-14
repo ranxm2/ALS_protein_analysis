@@ -1,0 +1,129 @@
+# R specific files
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+.Rprofile
+.Renviron
+
+# R session files
+.Rsession
+.Rsessioninfo
+
+# R package files
+*.Rcheck/
+*.tar.gz
+*.tgz
+*.zip
+
+# RStudio files
+.Rproj.user/
+*.Rproj
+
+# R markdown cache and output
+*_cache/
+*_files/
+*.html
+# *.pdf
+*.docx
+*.pptx
+
+# Temporary files
+*.tmp
+*.temp
+*~
+.DS_Store
+Thumbs.db
+
+# Data files (uncomment if you don't want to track data)
+# *.csv
+# *.xlsx
+# *.xls
+# *.rds
+# *.RData
+# *.rda
+# *.parquet
+# *.tsv
+# *.txt
+
+# Large data files
+*.csv.gz
+*.rds.gz
+*.RData.gz
+
+# Results and output directories
+# Uncomment if you don't want to track results
+# results/
+# output/
+# figures/
+# plots/
+
+# Large protein data files
+data/vaild/protein_matrix/
+data/vaild/protein_3k_single/
+
+# Log files
+*.log
+logs/
+
+# Cache directories
+.cache/
+cache/
+
+# Temporary directories
+temp/
+tmp/
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Excel temporary files
+~$*.xlsx
+~$*.xls
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.env.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Package specific
+packrat/
+renv/
+.Rprofile
+
+# Shiny apps
+shiny_apps/*/www/
+shiny_apps/*/data/
+
+# Plumber API
+plumber.R
+
+# R package development
+man/
+vignettes/
+inst/
+src/
+R/
+DESCRIPTION
+NAMESPACE 
+
+data/vaild/protein_3k_single/
