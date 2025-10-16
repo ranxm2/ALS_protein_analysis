@@ -1,0 +1,1104 @@
+---
+title: "Figure 1"
+author: "Ximing Ran"
+date: "2025-10-14"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+hitheme: tomorrow
+highlighter: highlight.js
+
+---
+
+```{r setup, include=FALSE}
+# load libraries
+library(tidyverse)
+library(knitr)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 9,
+  fig.height = 4,
+  fig.path = "./results/Analysis_figure/"
+)
+
+theme_set(theme_bw() + theme(legend.position = "bottom"))
+knitr::kable(head(mtcars[, 1:4]), "simple")
+```
+
+```{r load_packages}
+library(arrow)
+library(OlinkAnalyze)
+library(gridExtra)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(extrafont)
+library(ggsignif)
+library(jtools)
+library(cowplot)
+library(ggpubr)
+library(lme4)
+library(lmerTest)
+
+library(knitr)
+library(kableExtra)
+library(progress)
+library(ggrepel)
+library(gprofiler2)
+library(ggrepel)
+set.seed(2024)
+```
+
+
+
+```{r local_function_load}
+# load function from local files
+# source(here::here("source", "plot_spaghetti.R"))
+# source(here::here("source", "map_genes.R"))
+```
+
+
+\newpage
+
+# Fig 1A: Volcano plot of mixed effect model results
+
+```{r volcano_plot, fig.width=6, fig.height=6}
+miami_result <- read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)
+
+library(dplyr)
+library(ggplot2)
+
+# 1. Compute the raw‐p cutoff corresponding to FDR ≤ 0.05
+p_cutoff <- miami_result %>%
+  filter(padj <= 0.05) %>%
+  summarise(cutoff = max(Pr_t, na.rm = TRUE)) %>%
+  pull(cutoff)
+
+# 2. Prepare data for plotting
+volcano_df <- miami_result %>%
+  mutate(
+    negLogP      = -log10(padj),
+    significance = diffexpressed
+    )
+
+n_up   <- sum(volcano_df$significance == "UP")
+n_down <- sum(volcano_df$significance == "DOWN")
+
+
+# 3. Identify top 10 UP and top 10 DOWN by raw p‐value
+top_up   <- volcano_df %>%
+  filter(significance == "UP") %>%
+  arrange(Pr_t) %>%
+  slice_head(n = 15)
+
+top_down <- volcano_df %>%
+  filter(significance == "DOWN") %>%
+  arrange(Pr_t) %>%
+  slice_head(n = 15)
+
+top_10_genes <- bind_rows(top_up, top_down)
+top_10_genes <- volcano_df %>% filter(Protein %in% c("NEFL", "ART3", "EDA2R"))
+
+
+# 3. Volcano plot with custom colors
+p_a<- ggplot(volcano_df, aes(x = Estimate, y = negLogP, color = significance)) +
+  geom_point(alpha = 0.9, size = 1.5) +
+  
+  # threshold lines
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  # geom_vline(xintercept = c(-0.25, 0.25),        linetype = "dashed") +
+  # count annotations in the corners
+  annotate(
+    "text",
+    x    = min(volcano_df$Estimate, na.rm = TRUE) + 0.2,
+    y    = max(volcano_df$negLogP, na.rm = TRUE),
+    label = paste0("DOWN: ", n_down),
+    hjust = 0, vjust = 1.1,
+    family = "Arial",
+    size   = 6,
+    color  = "#427ebf"
+  ) +
+  annotate(
+    "text",
+    x    = max(volcano_df$Estimate, na.rm = TRUE) - 0.2,
+    y    = max(volcano_df$negLogP, na.rm = TRUE),
+    label = paste0("UP: ", n_up),
+    hjust = 1, vjust = 1.1,
+    family = "Arial",
+    size   = 6,
+    color  = "#A70C20"
+  ) +
+  # custom color scheme
+  scale_color_manual(
+    values = c(
+      UP   = "#A70C20",
+      DOWN = "#427ebf",
+      NO   = "grey50"
+    )
+  ) +
+  
+  # labels and theme
+  labs(
+    x     = "log2(fold change)",
+    y     = "-log10(FDR)",
+    # color = "Significance",
+    title = "ALS versus Control (Miami cohort)"
+  ) +
+  theme_classic(base_size = 14, base_family = "Arial") +
+  theme(
+    legend.position = "none",
+    plot.title      = element_text(hjust = 0.5)
+  )+
+  geom_label_repel(
+    data        = top_10_genes,
+    aes(
+      label        = Protein,
+      color        = significance
+    ),
+    size          = 4,
+    max.overlaps  = 50,
+    show.legend   = FALSE,
+    family        = "Arial",
+    box.padding   = 0.3,
+    point.padding = 0.2
+  )
+
+p_a
+```
+
+
+
+
+
+
+
+
+
+\newpage
+# Fig 1B: Up enrichment analysis of significant proteins from mixed effect model
+```{r up_enrichment_plot, fig.width=8, fig.height=6}
+result_up <- read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer_up_enrichment(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)%>% 
+             arrange(p_value)
+
+result_up <- result_up %>% select(source,term_name,p_value)  %>% 
+             mutate(term = sprintf("%s - %s",  source, term_name)) 
+
+top_30_up <- result_up %>% slice_head(n = 30) %>% 
+             arrange(desc(p_value))
+
+
+p_b <- top_30_up %>%
+  mutate(term = factor(term, levels = unique(term)),
+         highlight = ifelse(grepl("muscle", term, ignore.case = TRUE), "highlight", "normal")) %>%
+  ggplot(aes(term, -log2(p_value), fill = highlight)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = c("highlight" = "#e31a1c", "normal" = "#fc9272")) +  # Highlight muscle-related terms
+  ylab("-log2(FDR)") +
+  xlab("") +
+  # ggtitle("Top 30 Up-regulated Pathways") +
+  coord_flip() +
+  theme_classic(base_size = 14) +
+  theme(text = element_text(family = "Arial", size = 14, colour = "black"),
+        axis.title = element_text(color = "black"),
+        axis.text = element_text(color = "black"),
+        plot.title = element_text(family = "Arial", size = 14, face = "bold", hjust = 0.5)) +
+  geom_hline(yintercept = -log2(0.05), linetype = "dashed", color = "black")
+print(p_b)
+
+
+# library(dplyr)
+# library(ggplot2)
+# library(forcats)
+# 
+# result_up <- read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer_up_enrichment(2025-02-12).csv"),
+#                             header = TRUE, stringsAsFactors = FALSE)%>% 
+#              arrange(p_value)
+# 
+# # 1) Prepare and filter to top 5 per source
+# plot_df <- result_up %>%
+#   mutate(
+#     negLogP = -log10(p_value),
+#     source  = case_when(
+#       source == "GO:BP" ~ "BP",
+#       source == "GO:CC" ~ "CC",
+#       source == "GO:MF" ~ "MF",
+#       source == "KEGG"  ~ "KEGG",
+#       TRUE              ~ source
+#     )
+#   ) %>%
+#   filter(source %in% c("BP", "CC", "MF", "KEGG")) %>%
+#   group_by(source) %>%
+#   slice_min(order_by = p_value, n = 5, with_ties = FALSE) %>%  # top 5
+#   arrange(negLogP) %>%
+#   mutate(term_name = fct_inorder(term_name)) %>%
+#   ungroup()
+# 
+# # 2) Color palette
+# # 2) Color palette — replace with your exact hex codes
+# source_cols <- c(
+#   BP   = "#41B6C4",  # teal
+#   CC   = "#90C77B",  # olive-green
+#   MF   = "#D54839",  # brick-red
+#   KEGG = "#F39C12"   # golden-orange
+# )
+# 
+# # 3) Plot
+# ggplot(plot_df, aes(x = negLogP, y = term_name, fill = source)) +
+#   geom_col(width = 0.6) +
+#   geom_text(aes(label = intersection_size),
+#             hjust = -0.1, size = 3.5, family = "Arial") +
+#   scale_fill_manual(values = source_cols) +
+#   facet_wrap(~ source, scales = "free_y", ncol = 1, strip.position = "left") +
+#   scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+#   labs(
+#     x     = expression(-log[10](plain(p)[value])),
+#     y     = NULL,
+#     fill  = NULL,
+#     # title = "Top 5 Enriched Terms per Category"
+#   ) +
+#   theme_minimal(base_family = "Arial") +
+#   theme(
+#     axis.text.y        = element_text(size = 10),
+#     strip.text.y       = element_text(angle = 0, hjust = 1, face = "bold"),
+#     panel.grid.major.y = element_blank(),
+#     panel.grid.minor   = element_blank(),
+#     plot.title         = element_text(hjust = 0.5)
+#   )
+
+```
+
+
+```{r down_enrichment_plot, fig.width=8, fig.height=6}
+result_down <-  read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer_down_enrichment(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)
+result_down <- result_down %>% select(source,term_name,p_value)  %>%
+             mutate(term = sprintf("%s - %s",  source, term_name)) %>%
+             arrange(p_value)
+
+
+top_30_down <- result_down %>%
+  slice_head(n = 30) %>%
+  arrange(desc(p_value))
+
+p_c <- top_30_down %>%
+  mutate(term = factor(term, levels = unique(term)),
+         highlight = ifelse(grepl("muscle", term, ignore.case = TRUE), "highlight", "normal")) %>%
+  ggplot(aes(term, -log2(p_value), fill = highlight)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = c("highlight" = "blue", "normal" = "#56B1F7")) +  # Highlight muscle-related terms
+  ylab("-log2(FDR)") +
+  xlab("") +
+  # ggtitle("Top 30 Down-regulated Pathways") +
+  coord_flip() +
+  theme_classic(base_size = 14) +
+  theme(text = element_text(family = "Arial", size = 14, colour = "black"),
+        axis.title = element_text(color = "black"),
+        axis.text = element_text(color = "black"),
+        plot.title = element_text(family = "Arial", size = 14, face = "bold", hjust = 0.5)) +
+  geom_hline(yintercept = -log2(0.05), linetype = "dashed", color = "black")
+
+print(p_c)
+
+```
+
+\newpage
+# Fig 1C: correation with Italy cohort
+
+
+
+```{r fig1C_correlation_plot, fig.width=6, fig.height=6}
+miami_result <- read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)
+miami_result.sign <- miami_result %>% filter(diffexpressed != "NO")  %>% arrange((padj))
+italy_result <- read.csv(here::here("data", "summary_data", "Fig1", "Italian_limma_als_vs_control_2025-10-10.csv"),
+                            header = TRUE, stringsAsFactors = FALSE) %>% rename(Protein = X)
+
+miami_result.sign <- miami_result.sign %>% left_join(italy_result, by = "Protein", suffix = c(".miami", ".italy"))
+library(dplyr)
+library(ggplot2)
+
+# 1) Prepare and filter
+df <- miami_result.sign %>%        # replace with your actual data frame
+  select(Protein, Estimate, Std_Error, logFC, diffexpressed) %>%
+  filter(!is.na(Estimate), !is.na(logFC), !is.na(diffexpressed))
+
+# 2) Compute correlation statistics
+ct <- cor.test(df$Estimate, df$logFC)
+n   <- nrow(df)
+r   <- ct$estimate
+r2  <- r^2
+p   <- ct$p.value
+p_sci <- format(ct$p.value, digits = 3, scientific = TRUE)  
+
+df_anno <- df %>% filter(Protein %in% c("NEFL", "ART3", "EDA2R"))
+
+# 3) Scatter + error bars + regression ribbon, colored by diffexpressed
+p_c <- ggplot(df, aes(x = Estimate, y = logFC, color = diffexpressed)) +
+  # add a dash line with x =0
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  # add a dash line with y =0
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  
+  # horizontal error bars for Estimate ± Std_Error
+  # geom_errorbarh(aes(xmin = Estimate - Std_Error,
+  #                    xmax = Estimate + Std_Error),
+  #                height = 0, alpha = 0.4) +
+  # 
+  # points
+  geom_point(size = 2, alpha = 0.8) +
+  
+  # regression line + 95% CI ribbon
+  geom_smooth(method = "lm", se = TRUE, color = "black", fill = "grey80") +
+  
+  # custom colors for UP/DOWN
+  scale_color_manual(
+    values = c(
+      UP   = "#A70C20",
+      DOWN = "#427ebf"
+    )
+  ) +
+  
+
+  # annotate correlation stats
+  annotate("text",
+           x     = min(df$Estimate, na.rm = TRUE),
+           y     = max(df$logFC,    na.rm = TRUE),
+           label = paste0(
+             "N = ", n, "\n",
+             "Corr = ", round(r, 2), "\n",
+             "R-square = ", round(r2, 2), "\n",
+             "p = ", p_sci
+           ),
+           hjust = 0, vjust = 1,
+           family = "Arial",
+           size   = 4
+
+  ) +
+  
+  labs(
+    x     = "log2FC (Miami cohort)",
+    y     = "log2FC (Italy cohort)",
+    # color = "Direction",
+    title = "Miami cohort versus Italy cohort"
+  ) +
+  
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.title      = element_text(hjust = 0.5),
+    legend.position = "none"
+  )+
+  geom_label_repel(
+    data        = df_anno,
+    aes(
+      label        = Protein,
+      color        = diffexpressed
+    ),
+    size          = 4,
+    min.segment.length = 0,
+    max.overlaps  = 50,
+    show.legend   = FALSE,
+    family        = "Arial",
+    box.padding   = 0.3,
+    point.padding = 0.2
+  )
+
+print(p_c)
+
+
+
+```
+
+
+
+
+\newpage
+# Fig 1D: correlation with UKB cohort
+```{r fig1C_correlation_plot, fig.width=6, fig.height=6}
+miami_result <- read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)
+miami_result.sign <- miami_result %>% filter(diffexpressed != "NO")  %>% arrange((padj))
+ukb_result <- read.csv(here::here("data", "summary_data", "Fig1", "UKB_limma_als_vs_control_2025-10-10.csv"),
+                            header = TRUE, stringsAsFactors = FALSE) %>% rename(Protein = X)
+
+miami_result.sign <- miami_result.sign %>% left_join(ukb_result, by = "Protein", suffix = c(".miami", ".ukb"))
+library(dplyr)
+library(ggplot2)
+
+# 1) Prepare and filter
+df <- miami_result.sign %>%        # replace with your actual data frame
+  select(Protein, Estimate, Std_Error, logFC, diffexpressed) %>%
+  filter(!is.na(Estimate), !is.na(logFC), !is.na(diffexpressed))
+
+# 2) Compute correlation statistics
+ct <- cor.test(df$Estimate, df$logFC)
+n   <- nrow(df)
+r   <- ct$estimate
+r2  <- r^2
+p   <- ct$p.value
+p_sci <- format(ct$p.value, digits = 3, scientific = TRUE)  
+
+df_anno <- df %>% filter(Protein %in% c("NEFL", "ART3", "EDA2R"))
+
+# 3) Scatter + error bars + regression ribbon, colored by diffexpressed
+p_d <- ggplot(df, aes(x = Estimate, y = logFC, color = diffexpressed)) +
+  # add a dash line with x =0
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  # add a dash line with y =0
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  
+  # horizontal error bars for Estimate ± Std_Error
+  # geom_errorbarh(aes(xmin = Estimate - Std_Error,
+  #                    xmax = Estimate + Std_Error),
+  #                height = 0, alpha = 0.4) +
+  # 
+  # points
+  geom_point(size = 2, alpha = 0.8) +
+  
+  # regression line + 95% CI ribbon
+  geom_smooth(method = "lm", se = TRUE, color = "black", fill = "grey80") +
+  
+  # custom colors for UP/DOWN
+  scale_color_manual(
+    values = c(
+      UP   = "#A70C20",
+      DOWN = "#427ebf"
+    )
+  ) +
+  
+
+  # annotate correlation stats
+  annotate("text",
+           x     = min(df$Estimate, na.rm = TRUE),
+           y     = max(df$logFC,    na.rm = TRUE),
+           label = paste0(
+             "N = ", n, "\n",
+             "Corr = ", round(r, 2), "\n",
+             "R-square = ", round(r2, 2), "\n",
+             "p = ", p_sci
+           ),
+           hjust = 0, vjust = 1,
+           family = "Arial",
+           size   = 4
+
+  ) +
+  
+  labs(
+    x     = "log2FC (Miami cohort)",
+    y     = "log2FC (UK cohort)",
+    # color = "Direction",
+    title = "Miami cohort versus UK cohort"
+  ) +
+  
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.title      = element_text(hjust = 0.5),
+    legend.position = "none"
+  )+
+  geom_label_repel(
+    data        = df_anno,
+    aes(
+      label        = Protein,
+      color        = diffexpressed
+    ),
+    size          = 4,
+    min.segment.length = 0,
+    max.overlaps  = 50,
+    show.legend   = FALSE,
+    family        = "Arial",
+    box.padding   = 0.3,
+    point.padding = 0.2
+  )
+
+print(p_d)
+
+
+
+```
+
+
+
+
+
+```{r load data}
+
+parquet_file <- here::here("data", "protein", "P240014_Extended_NPX_2024-07-29.parquet")
+df_Int <-read_parquet(parquet_file)
+df_Int$SampleID <- gsub(" ", "", df_Int$SampleID)
+df_Int <- df_Int %>%filter(str_detect(SampleType, '^SAMPLE$')) 
+
+
+results_protein <- read.csv(here::here("results", "Protein_Selection", "M1_Mix_effect_model_lmer(2025-03-22).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)
+result_signficant <- results_protein %>% filter(significant_ALS == "Significant")  %>% arrange((padj_ALS))
+mix_effect_protein <-result_signficant %>% pull(Protein)
+
+
+# Clustering with MCL : inflation parameter = 3, edges between clusters = dash line
+# data from STRINGdb :https://string-db.org/cgi/network?taskId=bt4ckF4vdmYO&sessionId=bFQd9ERyzIyx
+cluster_result <- read_csv(here::here("data", "protein", "string_MCL_clusters_2025_04_21.csv"), col_names = TRUE)
+
+
+# Clean up cluster result if needed
+cluster_df <- cluster_result %>%
+  rename(cluster = `cluster number`, 
+         Protein = `protein name`, 
+         cluster_color = `hex color`) %>%
+  select(Protein, cluster, cluster_color)
+
+result_signficant <- merge(result_signficant , cluster_df, by = "Protein", all.x = TRUE)
+
+
+# fill the cluster color with grey
+result_signficant$cluster_color[is.na(result_signficant$cluster_color)] <- "#D3D3D3"
+
+# fill the NA with "Unclustered"
+result_signficant$cluster[is.na(result_signficant$cluster)] <- "Unclustered"
+
+result_signficant$label <-result_signficant$cluster
+# replace the 2 as "TNF receptor / JNK signaling activation"
+# 1 as Skeletal muscle
+# 8 as TGFβ activation
+# 6 as Regeneration (mixed)
+# 5 as Extracellular matrix
+result_signficant$label[result_signficant$cluster == 2] <- "TNF receptor / JNK signaling activation"
+result_signficant$label[result_signficant$cluster == 1] <- "Skeletal muscle"
+result_signficant$label[result_signficant$cluster == 8] <- "TGFβ activation"
+result_signficant$label[result_signficant$cluster == 6] <- "Regeneration (mixed)"
+
+
+```
+
+
+# 2. Plot the PPI
+
+
+```{r PPI+object}
+# Load required packages
+library(STRINGdb)
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+
+
+# Initialize STRINGdb (human: species=9606)
+string_db <- STRINGdb$new(version = "11.5", species = 9606, score_threshold = 400)
+
+# Map your proteins to STRING IDs
+mapped_df <- string_db$map(result_signficant, "Protein", removeUnmappedRows = TRUE)
+
+# Get interactions among your proteins
+interactions <- string_db$get_interactions(mapped_df$STRING_id)
+
+# Merge node attributes
+attr_df <- mapped_df[, c("STRING_id", "Protein", "Eff_ALS", "padj_ALS","cluster", "cluster_color")]
+attr_df$log10padj <- -log10(attr_df$padj_ALS)
+
+
+```
+
+
+
+```{r plot_PPI, fig.width=12, fig.height=8}
+# Create igraph object
+ppi_graph <- graph_from_data_frame(d = interactions, 
+                                   vertices = attr_df %>% distinct(STRING_id, .keep_all = TRUE),
+                                   directed = FALSE)
+
+
+# Add attributes to graph vertices
+V(ppi_graph)$Protein <- attr_df$Protein[match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$Eff_ALS <- attr_df$Eff_ALS[match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$padj_ALS <- attr_df$padj_ALS[match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$size <- attr_df$log10padj[match(V(ppi_graph)$name, attr_df$STRING_id)]
+
+
+# Get the range of Eff_ALS
+eff_range <- range(V(ppi_graph)$Eff_ALS, na.rm = TRUE)
+
+# Define node color scale based on Eff_ALS
+V(ppi_graph)$color <- scales::col_numeric(
+  palette = c("blue", "white", "red"),
+  domain = eff_range
+)(V(ppi_graph)$Eff_ALS)
+
+# Define edge width based on interaction score (confidence)
+E(ppi_graph)$weight <- E(ppi_graph)$combined_score / 1000  # Normalize [0,1]
+
+# Convert to tidygraph for plotting
+ppi_tbl <- as_tbl_graph(ppi_graph)
+
+
+
+ppi_graph_cluster <- ppi_graph
+V(ppi_graph_cluster)$cluster <- attr_df$cluster[match(V(ppi_graph_cluster)$name, attr_df$STRING_id)]
+V(ppi_graph_cluster)$cluster_color <- attr_df$cluster_color[match(V(ppi_graph_cluster)$name, attr_df$STRING_id)]
+cluster_map <- setNames(V(ppi_graph_cluster)$cluster, V(ppi_graph_cluster)$name)
+
+# Add between_cluster flag
+E(ppi_graph_cluster)$between_cluster <- apply(
+  as.data.frame(ends(ppi_graph_cluster, es = E(ppi_graph_cluster))),
+  1,
+  function(pair) {
+    cluster_map[pair[1]] != cluster_map[pair[2]]
+  }
+)
+
+# Convert igraph to tidygraph
+ppi_tbl_cluster <- as_tbl_graph(ppi_graph_cluster)
+
+
+```
+\newpage
+
+```{r plot_PPI_cluster, fig.width=12, fig.height=8}
+# ───────────────────────────────────────────────────────────────────────────────
+# Full R script: build PPI graph, remove zero‐degree nodes, compute clusters & layout,
+# and plot only hulls for clusters 1,2,5,6,8 with matching fill & border colors
+# ───────────────────────────────────────────────────────────────────────────────
+
+library(ggraph)
+library(tidygraph)
+library(ggplot2)
+library(scales)
+library(ggforce)
+library(ggnewscale)
+library(dplyr)
+
+# — 1) Build igraph from your edges + vertex metadata —
+ppi_graph <- graph_from_data_frame(
+  d        = interactions,
+  vertices = attr_df %>% distinct(STRING_id, .keep_all = TRUE),
+  directed = FALSE
+)
+
+# — 2) Add vertex attributes —
+V(ppi_graph)$Protein    <- attr_df$Protein[   match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$Eff_ALS    <- attr_df$Eff_ALS[   match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$padj_ALS   <- attr_df$padj_ALS[  match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$size       <- attr_df$log10padj[match(V(ppi_graph)$name, attr_df$STRING_id)]
+
+# — 3) Prune out any isolated nodes (zero connections) —
+deg <- degree(ppi_graph)
+ppi_graph <- delete_vertices(ppi_graph, V(ppi_graph)[which(deg == 0)])
+
+# — 4) Add clustering info (only for the remaining nodes) —
+V(ppi_graph)$cluster       <- attr_df$cluster[      match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$cluster_color <- attr_df$cluster_color[match(V(ppi_graph)$name, attr_df$STRING_id)]
+
+# — 5) Edge attributes: normalize combined_score to [0,1] and flag between‐cluster edges —
+E(ppi_graph)$weight <- E(ppi_graph)$combined_score / 1000
+cluster_map <- setNames(V(ppi_graph)$cluster, V(ppi_graph)$name)
+E(ppi_graph)$between_cluster <- apply(
+  as.data.frame(ends(ppi_graph, E(ppi_graph))),
+  1,
+  function(pair) cluster_map[pair[1]] != cluster_map[pair[2]]
+)
+
+# — 6) Create tidygraph and compute a fixed layout —
+ppi_tbl <- as_tbl_graph(ppi_graph)
+layout <- create_layout(ppi_tbl, layout = "fr")
+
+# — 7) Pre‐compute the Eff_ALS range for the continuous node‐fill scale —
+eff_range <- range(V(ppi_graph)$Eff_ALS, na.rm = TRUE)
+
+# — 8) Extract only those nodes belonging to clusters 1,2,5,6,8 for the hulls —
+hull_df <- as.data.frame(layout) %>%
+  filter(cluster %in% c(1, 2, 5, 6, 8))
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 9) Plot with ggraph
+# ───────────────────────────────────────────────────────────────────────────────
+ggraph(layout) +
+  
+  # a) cluster hulls for only clusters 1,2,5,6,8, with identical fill & border
+  geom_mark_hull(
+    data        = hull_df,
+    aes(
+      x     = x,
+      y     = y,
+      group = cluster,
+      fill  = cluster_color,
+      color = cluster_color
+    ),
+    expand      = unit(4, "mm"),
+    alpha       = 0.15,
+    show.legend = FALSE
+  ) +
+  scale_fill_identity() +
+  scale_color_identity() +
+  
+  # b) start a new fill scale for the nodes
+  new_scale_fill() +
+  
+  # c) edges
+  geom_edge_link(
+    aes(width = weight),
+    color    = "grey80",
+    linetype = "solid",
+    alpha    = 0.5
+  ) +
+  
+  # d) nodes: size ∝ –log10(padj), fill ∝ Eff_ALS
+  geom_node_point(
+    aes(fill = Eff_ALS, size = size),
+    shape  = 21,
+    stroke = 0.1
+  ) +
+  
+  # e) labels
+  geom_node_text(
+    aes(label = Protein),
+    repel = TRUE,
+    size  = 3
+  ) +
+  
+  # f) continuous fill scale for Eff_ALS
+  scale_fill_gradientn(
+    colors = c("blue", "white", "red"),
+    values = rescale(c(eff_range[1], 0, eff_range[2])),
+    name   = "Eff_ALS"
+  ) +
+  
+  # g) other scales
+  scale_edge_linetype_manual(
+    values = c("TRUE" = "dashed", "FALSE" = "solid"),
+    guide  = "none"
+  ) +
+  scale_size_continuous(
+    range = c(3, 10),
+    name  = "-log10(padj)"
+  ) +
+  scale_edge_width(
+    
+    range = c(0.3, 2),
+    name  = "STRING Score"
+  ) +
+  
+  # h) theme & legend
+  theme_void() +
+  theme(legend.position = "right") +
+  labs(fill = "ALS")
+
+ggsave(here::here("results", "Protein_Selection", "PPI", "PPI_cluster_mask_with_cluster.pdf"), width = 12, height = 8)
+ggsave(here::here("results", "Protein_Selection", "PPI", "PPI_cluster_mask_with_cluster.svg"), width = 12, height = 8)
+ggsave(here::here("results", "Protein_Selection", "PPI", "PPI_cluster_mask_with_cluster.png"), width = 12, height = 8, dpi = 300)
+
+
+
+```
+
+\newpage
+
+# Heatmap
+
+```{r generate_heatmap, fig.width=9, fig.height=12}
+library(dplyr)
+library(pheatmap)
+library(RColorBrewer)
+library(here)
+library(readr)
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 1) Load data & your results
+# ───────────────────────────────────────────────────────────────────────────────
+protein_matrix <- readRDS(
+  here("data","clean_data","final_data_matrix_2025-02-12.rds")
+)
+
+visit_info_2 <- read.csv(
+  here("data","visit_info","df_visit_info(N=516).csv")
+) %>%
+  filter(OlinkGrp %in% c(0,3)) %>%
+  mutate(
+    OlinkGrp = factor(OlinkGrp,
+                      levels=c(0,3),
+                      labels=c("CTRL","ALS-Symptomatic"))
+  ) %>%
+  arrange(OlinkGrp, SampleID) %>% select (SampleID, OlinkGrp)
+
+results_protein <- read.csv(
+  here("results","Protein_Selection","M1_Mix_effect_model_lmer(2025-02-12).csv")
+) %>%
+  filter(significant == "Significant") %>%
+  arrange(padj) %>%
+  select(Protein)
+
+cluster_result <- read_csv(
+  here("data","protein","string_MCL_clusters_2025_04_21.csv")
+)
+
+cluster_df <- cluster_result %>%
+  rename(
+    cluster       = `cluster number`,
+    Protein       = `protein name`,
+    cluster_color = `hex color`
+  ) %>%
+  select(Protein, cluster, cluster_color)
+
+result_signficant <- results_protein %>%
+  left_join(cluster_df, by = "Protein") %>%
+  mutate(
+    cluster       = ifelse(is.na(cluster), "Unclustered", as.character(cluster)),
+    cluster_color = ifelse(is.na(cluster_color), "#D3D3D3", cluster_color),
+    label = case_when(
+      # 1) unclustered stays “Unclustered”
+      cluster == "Unclustered" ~ "Unclustered",
+      
+      # 2) your special mappings
+      cluster == "1" ~ "Skeletal muscle",
+      cluster == "2" ~ "TNF receptor / JNK signaling activation",
+      cluster == "5" ~ "Extracellular matrix",
+      cluster == "6" ~ "Regeneration (mixed)",
+      cluster == "8" ~ "TGFβ activation",
+      
+      # 3) everything else: “cluster_<number>”
+      TRUE ~ paste0("Cluster_", cluster)
+    )
+  )
+
+
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 2) Build and scale the matrix
+# ───────────────────────────────────────────────────────────────────────────────
+prots <- result_signficant$Protein
+
+# 1) build the pure numeric matrix
+mat_sp <- protein_matrix %>%
+  select(SampleID, all_of(prots)) %>%
+  column_to_rownames("SampleID")
+
+# 2) now scale only the numeric data
+mat_scaled <- t(scale(t(mat_sp)))
+
+# 3) afterwards, re-order columns and do annotation separately
+mat_for_heatmap <- t(mat_scaled)[, visit_info_2$SampleID]
+
+annotation_col <- visit_info_2 %>%
+  column_to_rownames("SampleID")
+
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 3) Column ordering & annotation
+# ───────────────────────────────────────────────────────────────────────────────
+mat_sel        <- mat_for_heatmap
+annotation_col <- visit_info_2 %>%
+  select(SampleID, OlinkGrp) %>%
+  column_to_rownames("SampleID")
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 4) Row annotation from your clusters
+# ───────────────────────────────────────────────────────────────────────────────
+annotation_row <- result_signficant %>%
+  # filter(Protein %in% rownames(mat_sel)) %>%
+  select(Protein, label, cluster_color) %>%
+  column_to_rownames("Protein")
+
+# Build a named vector: label → hex color
+label_colors <- annotation_row %>% 
+  distinct(label, cluster_color) %>% 
+  # make a named vector: names = label, values = cluster_color
+  { setNames(.$cluster_color, .$label) }
+
+# names(label_colors) <- annotation_row$label
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 5) Annotation color lists
+# ───────────────────────────────────────────────────────────────────────────────
+ann_colors <- list(
+  OlinkGrp = c("CTRL" = "#63a33b", "ALS-Symptomatic" = "#b32812"),
+  label    = label_colors
+)
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 6) Cell palette & draw
+# ───────────────────────────────────────────────────────────────────────────────
+cell_pal <- rev(colorRampPalette(brewer.pal(11,"RdBu"))(256))
+
+p<-pheatmap(
+  mat_sel,
+  color             = cell_pal,
+  scale             = "row",
+  cluster_rows      = TRUE,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  show_colnames     = FALSE,
+  annotation_col    = annotation_col,
+  annotation_row    = annotation_row["label", drop=FALSE],
+  annotation_colors = ann_colors,
+  fontsize_row      = 6,
+  border_color      = NA,
+  main              = ""
+)
+
+ggsave(here::here("results", "Protein_Selection", "PPI", "Heatmap_PPI_cluster_mask_with_cluster.pdf"), plot=p ,width = 9, height = 12)
+
+ggsave(here::here("results", "Protein_Selection", "PPI", "Heatmap_PPI_cluster_mask_with_cluster.svg"), plot=p ,width = 9, height = 12)
+# save to png
+ggsave(here::here("results", "Protein_Selection", "PPI", "Heatmap_PPI_cluster_mask_with_cluster.png"), plot=p ,width = 9, height = 12, dpi = 300)
+
+
+
+
+
+
+
+```
+
+
+
+
+
+\newpage
+
+\newpage
+
+<!-- ```{r plot_PPI_cluster_mask_no_single, fig.width=12, fig.height=8} -->
+<!-- library(ggraph) -->
+<!-- library(tidygraph) -->
+<!-- library(scales) -->
+<!-- library(ggplot2) -->
+
+<!-- # Ensure edge attributes are correctly assigned -->
+<!-- E(ppi_graph_cluster)$weight <- E(ppi_graph_cluster)$combined_score / 1000 -->
+
+<!-- # Define cluster mapping for edge attribute -->
+<!-- cluster_map <- setNames(V(ppi_graph_cluster)$cluster, V(ppi_graph_cluster)$name) -->
+
+<!-- # Compute between_cluster edges -->
+<!-- E(ppi_graph_cluster)$between_cluster <- apply( -->
+<!--   as.data.frame(ends(ppi_graph_cluster, es = E(ppi_graph_cluster))), -->
+<!--   1, -->
+<!--   function(pair) cluster_map[pair[1]] != cluster_map[pair[2]] -->
+<!-- ) -->
+
+<!-- # Convert to tidygraph -->
+<!-- ppi_tbl_cluster <- as_tbl_graph(ppi_graph_cluster) -->
+
+<!-- # Get Eff_ALS range for color scaling -->
+<!-- eff_range <- range(V(ppi_graph_cluster)$Eff_ALS, na.rm = TRUE) -->
+
+<!-- # Plot -->
+<!-- ggraph(ppi_tbl_cluster, layout = "fr") + -->
+<!--   # Edge layer: width & dashed if between clusters -->
+<!--   geom_edge_link(aes(width = weight, linetype = between_cluster), -->
+<!--                  alpha = 0.3, color = "grey50") + -->
+
+<!--   # Node layer: fill = Eff_ALS, stroke = cluster color -->
+<!--   geom_node_point(aes(fill = Eff_ALS, -->
+<!--                       size = size, -->
+<!--                       stroke = 1.5), -->
+<!--                   shape = 21, -->
+<!--                   color = V(ppi_graph_cluster)$cluster_color) +  # stroke border color -->
+
+<!--   # Node labels -->
+<!--   geom_node_text(aes(label = Protein), repel = TRUE, size = 3) + -->
+
+<!--   # Color gradient for Eff_ALS -->
+<!--   scale_fill_gradientn( -->
+<!--     colors = c("blue", "white", "red"), -->
+<!--     values = rescale(c(eff_range[1], 0, eff_range[2])), -->
+<!--     name = "Eff_ALS" -->
+<!--   ) + -->
+
+<!--   # Linetype for between-cluster edges -->
+<!--   scale_edge_linetype_manual( -->
+<!--     values = c("TRUE" = "dashed", "FALSE" = "solid"), -->
+<!--     guide = "none" -->
+<!--   ) + -->
+
+<!--   # Size and edge width scales -->
+<!--   scale_size_continuous(range = c(3, 10), name = "-log10(padj)") + -->
+<!--   scale_edge_width(range = c(0.3, 2), name = "STRING Score") + -->
+
+<!--   # Theme -->
+<!--   theme_void() + -->
+<!--   theme(legend.position = "right") + -->
+<!--   labs(fill = "ALS") -->
+
+
+<!-- ``` -->
+
+
+
+
+<!-- \newpage -->
+
+<!-- ```{r plot_PPI_cluster_mask_with_cluster, fig.width=12, fig.height=8} -->
+<!-- library(dplyr) -->
+
+<!-- # make sure hull_layout has a cluster_color column: -->
+<!-- hull_layout <- as.data.frame(layout) %>% -->
+<!--   filter(cluster %in% c(1,2,5,6,8)) %>% -->
+<!--   mutate(cluster_color = V(ppi_graph_cluster)$cluster_color[match(name, V(ppi_graph_cluster)$name)]) -->
+
+<!-- ggraph(layout) + -->
+<!--   # draw only the selected hulls, using the same color for fill & border -->
+<!--   geom_mark_hull( -->
+<!--     data = hull_layout, -->
+<!--     aes( -->
+<!--       x = x, y = y, group = cluster, -->
+<!--       fill  = cluster_color, -->
+<!--       color = cluster_color -->
+<!--     ), -->
+<!--     expand      = unit(4, "mm"), -->
+<!--     alpha       = 0.15, -->
+<!--     show.legend = FALSE -->
+<!--   ) + -->
+<!--   # tell ggplot to use these colors “as is” -->
+<!--   scale_fill_identity() + -->
+<!--   scale_color_identity() + -->
+
+<!--   # …and then all your other layers unchanged… -->
+<!--   new_scale_fill() + -->
+<!--   geom_edge_link(aes(width = weight), alpha = 0.5, color = "grey50") + -->
+<!--   geom_node_point(aes(fill = Eff_ALS, size = size), shape = 21, stroke = 0.1) + -->
+<!--   geom_node_text(aes(label = Protein), repel = TRUE, size = 3) + -->
+<!--   scale_fill_gradientn( -->
+<!--     colors = c("blue","white","red"), -->
+<!--     values = scales::rescale(c(eff_range[1], 0, eff_range[2])), -->
+<!--     name   = "Eff_ALS" -->
+<!--   ) + -->
+<!--   scale_edge_linetype_manual(values = c("TRUE"="dashed","FALSE"="solid"), guide="none") + -->
+<!--   scale_size_continuous(range = c(3,10), name = "-log10(padj)") + -->
+<!--   scale_edge_width(range = c(0.3,2), name = "STRING Score") + -->
+<!--   theme_void() + -->
+<!--   theme(legend.position = "right") + -->
+<!--   labs(fill = "ALS") -->
+
+
+
+<!-- ``` -->
+
+
+
+
+
+
+
+\newpage
+
+# Session Info
+
+```{r}
+sessionInfo()
+
+```

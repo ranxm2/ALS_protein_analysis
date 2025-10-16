@@ -1,0 +1,623 @@
+---
+title: "Figure 1"
+author: "Ximing Ran"
+date: "2025-10-14"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+hitheme: tomorrow
+highlighter: highlight.js
+
+---
+
+```{r setup, include=FALSE}
+# load libraries
+library(tidyverse)
+library(knitr)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 9,
+  fig.height = 4,
+  fig.path = "./results/Analysis_figure/"
+)
+
+theme_set(theme_bw() + theme(legend.position = "bottom"))
+knitr::kable(head(mtcars[, 1:4]), "simple")
+```
+
+```{r load_packages}
+library(arrow)
+library(OlinkAnalyze)
+library(gridExtra)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(extrafont)
+library(ggsignif)
+library(jtools)
+library(cowplot)
+library(ggpubr)
+library(lme4)
+library(lmerTest)
+
+library(knitr)
+library(kableExtra)
+library(progress)
+library(ggrepel)
+library(gprofiler2)
+library(ggrepel)
+
+
+library(ggraph)
+library(tidygraph)
+library(ggplot2)
+library(scales)
+library(ggforce)
+library(ggnewscale)
+library(dplyr)
+library(igraph)
+
+
+set.seed(2024)
+```
+
+
+
+```{r local_function_load}
+# load function from local files
+# source(here::here("source", "plot_spaghetti.R"))
+# source(here::here("source", "map_genes.R"))
+```
+
+
+\newpage
+
+# Fig 1A: Volcano plot of differential expression proteins
+
+```{r volcano_plot, fig.width=6, fig.height=6}
+miami_result <- read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)
+
+library(dplyr)
+library(ggplot2)
+
+# 1. Compute the raw‐p cutoff corresponding to FDR ≤ 0.05
+p_cutoff <- miami_result %>%
+  filter(padj <= 0.05) %>%
+  summarise(cutoff = max(Pr_t, na.rm = TRUE)) %>%
+  pull(cutoff)
+
+# 2. Prepare data for plotting
+volcano_df <- miami_result %>%
+  mutate(
+    negLogP      = -log10(padj),
+    significance = diffexpressed
+    )
+
+n_up   <- sum(volcano_df$significance == "UP")
+n_down <- sum(volcano_df$significance == "DOWN")
+
+
+# 3. Identify top 10 UP and top 10 DOWN by raw p‐value
+top_up   <- volcano_df %>%
+  filter(significance == "UP") %>%
+  arrange(Pr_t) %>%
+  slice_head(n = 15)
+
+top_down <- volcano_df %>%
+  filter(significance == "DOWN") %>%
+  arrange(Pr_t) %>%
+  slice_head(n = 15)
+
+top_10_genes <- bind_rows(top_up, top_down)
+top_10_genes <- volcano_df %>% filter(Protein %in% c("NEFL", "ART3", "EDA2R"))
+
+
+# 3. Volcano plot with custom colors
+p_a<- ggplot(volcano_df, aes(x = Estimate, y = negLogP, color = significance)) +
+  geom_point(alpha = 0.9, size = 1.5) +
+  
+  # threshold lines
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  # geom_vline(xintercept = c(-0.25, 0.25),        linetype = "dashed") +
+  # count annotations in the corners
+  annotate(
+    "text",
+    x    = min(volcano_df$Estimate, na.rm = TRUE) + 0.2,
+    y    = max(volcano_df$negLogP, na.rm = TRUE),
+    label = paste0("DOWN: ", n_down),
+    hjust = 0, vjust = 1.1,
+    family = "Arial",
+    size   = 6,
+    color  = "#427ebf"
+  ) +
+  annotate(
+    "text",
+    x    = max(volcano_df$Estimate, na.rm = TRUE) - 0.2,
+    y    = max(volcano_df$negLogP, na.rm = TRUE),
+    label = paste0("UP: ", n_up),
+    hjust = 1, vjust = 1.1,
+    family = "Arial",
+    size   = 6,
+    color  = "#A70C20"
+  ) +
+  # custom color scheme
+  scale_color_manual(
+    values = c(
+      UP   = "#A70C20",
+      DOWN = "#427ebf",
+      NO   = "grey50"
+    )
+  ) +
+  
+  # labels and theme
+  labs(
+    x     = "log2(fold change)",
+    y     = "-log10(FDR)",
+    # color = "Significance",
+    title = "ALS versus Control (Miami cohort)"
+  ) +
+  theme_classic(base_size = 14, base_family = "Arial") +
+  theme(
+    legend.position = "none",
+    plot.title      = element_text(hjust = 0.5),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        panel.background = element_rect(fill = "transparent", color = NA)
+  )+
+  geom_label_repel(
+    data        = top_10_genes,
+    aes(
+      label        = Protein,
+      color        = significance
+    ),
+    size          = 4,
+    max.overlaps  = 50,
+    min.segment.length = 0,
+    show.legend   = FALSE,
+    family        = "Arial",
+    box.padding   = 0.3,
+    point.padding = 0.2
+  )
+
+print(p_a)
+ggsave(p_a, file = "./results/Fig_1A_volcano.png", width = 6, height = 6, dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+\newpage
+# Fig 1B: Up enrichment analysis 
+```{r up_enrichment_plot, fig.width=8, fig.height=6}
+result_up <- read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer_up_enrichment(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)%>% 
+             arrange(p_value)
+
+result_up <- result_up %>% select(source,term_name,p_value)  %>% 
+             mutate(term = sprintf("%s - %s",  source, term_name)) 
+
+top_30_up <- result_up %>% slice_head(n = 30) %>% 
+             arrange(desc(p_value))
+
+
+p_b <- top_30_up %>%
+  mutate(term = factor(term, levels = unique(term)),
+         highlight = ifelse(grepl("muscle", term, ignore.case = TRUE), "highlight", "normal")) %>%
+  ggplot(aes(term, -log2(p_value), fill = highlight)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = c("highlight" = "#e31a1c", "normal" = "#fc9272")) +  # Highlight muscle-related terms
+  ylab("-log2(FDR)") +
+  xlab("") +
+  ggtitle("Top 30 Up-regulated Pathways") +
+  coord_flip() +
+  theme_classic(base_size = 14) +
+  theme(text = element_text(family = "Arial", size = 14, colour = "black"),
+        axis.title = element_text(color = "black"),
+        axis.text = element_text(color = "black"),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        panel.background = element_rect(fill = "transparent", color = NA),
+        plot.title = element_text(family = "Arial", size = 14, face = "bold", hjust = 0.5))+
+  geom_hline(yintercept = -log2(0.05), linetype = "dashed", color = "black")
+print(p_b)
+
+ggsave(p_b, file = "./results/Fig_1B_up_enrichment.png", width = 8, height = 6, dpi = 300)
+```
+
+
+
+\newpage
+# Fig 1C: Down enrichment analysis 
+
+```{r down_enrichment_plot, fig.width=8, fig.height=6}
+result_down <-  read.csv(here::here("data", "summary_data", "Fig1", "M1_Mix_effect_model_lmer_down_enrichment(2025-02-12).csv"),
+                            header = TRUE, stringsAsFactors = FALSE)
+result_down <- result_down %>% select(source,term_name,p_value)  %>%
+             mutate(term = sprintf("%s - %s",  source, term_name)) %>%
+             arrange(p_value)
+
+
+top_30_down <- result_down %>%
+  slice_head(n = 30) %>%
+  arrange(desc(p_value))
+
+p_c <- top_30_down %>%
+  mutate(term = factor(term, levels = unique(term)),
+         highlight = ifelse(grepl("muscle", term, ignore.case = TRUE), "highlight", "normal")) %>%
+  ggplot(aes(term, -log2(p_value), fill = highlight)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = c("highlight" = "blue", "normal" = "#56B1F7")) +
+  geom_hline(yintercept = -log2(0.05), linetype = "dashed", color = "black") +
+  ylab("-log2(FDR)") +
+  xlab("") +
+  ggtitle("Top 30 Downregulated Pathways") +          # ← add your title here
+  coord_flip() +
+  theme_classic(base_size = 14) +
+  theme(
+    text = element_text(family = "Arial", size = 14, colour = "black"),
+    axis.title = element_text(color = "black"),
+    axis.text = element_text(color = "black"),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    plot.title = element_text(family = "Arial", size = 14, face = "bold", hjust = 0.5)
+  )
+
+print(p_c)
+ggsave(p_c, file = "./results/Fig_1C_down_enrichment.png", width = 8, height = 6, dpi = 300)
+
+
+```
+
+\newpage
+
+
+
+# Fig 1D: PPI network of DE proteins
+
+```{r ppi_network_plot, fig.width=10, fig.height=8}
+attr_df <- read.csv(here::here("data", "summary_data", "Fig1", "attr_df.csv"), header = TRUE, stringsAsFactors = FALSE)
+interactions <- read.csv(here::here("data", "summary_data", "Fig1", "interactions.csv"), header = TRUE, stringsAsFactors = FALSE)
+
+
+# — 1) Build igraph from your edges + vertex metadata —
+ppi_graph <- graph_from_data_frame(
+  d        = interactions,
+  vertices = attr_df %>% distinct(STRING_id, .keep_all = TRUE),
+  directed = FALSE
+)
+
+# — 2) Add vertex attributes —
+V(ppi_graph)$Protein    <- attr_df$Protein[   match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$Eff_ALS    <- attr_df$Eff_ALS[   match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$padj_ALS   <- attr_df$padj_ALS[  match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$size       <- attr_df$log10padj[match(V(ppi_graph)$name, attr_df$STRING_id)]
+
+# — 3) Prune out any isolated nodes (zero connections) —
+deg <- degree(ppi_graph)
+ppi_graph <- delete_vertices(ppi_graph, V(ppi_graph)[which(deg == 0)])
+
+# — 4) Add clustering info (only for the remaining nodes) —
+V(ppi_graph)$cluster       <- attr_df$cluster[      match(V(ppi_graph)$name, attr_df$STRING_id)]
+V(ppi_graph)$cluster_color <- attr_df$cluster_color[match(V(ppi_graph)$name, attr_df$STRING_id)]
+
+# — 5) Edge attributes: normalize combined_score to [0,1] and flag between‐cluster edges —
+E(ppi_graph)$weight <- E(ppi_graph)$combined_score / 1000
+cluster_map <- setNames(V(ppi_graph)$cluster, V(ppi_graph)$name)
+E(ppi_graph)$between_cluster <- apply(
+  as.data.frame(ends(ppi_graph, E(ppi_graph))),
+  1,
+  function(pair) cluster_map[pair[1]] != cluster_map[pair[2]]
+)
+
+# — 6) Create tidygraph and compute a fixed layout —
+ppi_tbl <- as_tbl_graph(ppi_graph)
+layout <- create_layout(ppi_tbl, layout = "fr")
+
+# — 7) Pre‐compute the Eff_ALS range for the continuous node‐fill scale —
+eff_range <- range(V(ppi_graph)$Eff_ALS, na.rm = TRUE)
+
+# — 8) Extract only those nodes belonging to clusters 1,2,5,6,8 for the hulls —
+hull_df <- as.data.frame(layout) %>%
+  filter(cluster %in% c(1, 2, 5, 6, 8))
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 9) Plot with ggraph
+# ───────────────────────────────────────────────────────────────────────────────
+p_d <- ggraph(layout) +
+  
+  # a) cluster hulls for only clusters 1,2,5,6,8, with identical fill & border
+  geom_mark_hull(
+    data        = hull_df,
+    aes(
+      x     = x,
+      y     = y,
+      group = cluster,
+      fill  = cluster_color,
+      color = cluster_color
+    ),
+    expand      = unit(4, "mm"),
+    alpha       = 0.15,
+    show.legend = FALSE
+  ) +
+  scale_fill_identity() +
+  scale_color_identity() +
+  
+  # b) start a new fill scale for the nodes
+  new_scale_fill() +
+  
+  # c) edges
+  geom_edge_link(
+    aes(width = weight),
+    color    = "grey80",
+    linetype = "solid",
+    alpha    = 0.5
+  ) +
+  
+  # d) nodes: size ∝ –log10(padj), fill ∝ Eff_ALS
+  geom_node_point(
+    aes(fill = Eff_ALS, size = size),
+    shape  = 21,
+    stroke = 0.1
+  ) +
+  
+  # e) labels
+  geom_node_text(
+    aes(label = Protein),
+    repel = TRUE,
+    size  = 3
+  ) +
+  
+  # f) continuous fill scale for Eff_ALS
+  scale_fill_gradientn(
+    colors = c("blue", "white", "red"),
+    values = rescale(c(eff_range[1], 0, eff_range[2])),
+    name   = "Eff_ALS"
+  ) +
+  
+  # g) other scales
+  scale_edge_linetype_manual(
+    values = c("TRUE" = "dashed", "FALSE" = "solid"),
+    guide  = "none"
+  ) +
+  scale_size_continuous(
+    range = c(3, 10),
+    name  = "-log10(padj)"
+  ) +
+  scale_edge_width(
+    
+    range = c(0.3, 2),
+    name  = "STRING Score"
+  ) +
+  
+  # h) theme & legend
+  theme_void() +
+  theme(legend.position = "right",
+        plot.background = element_rect(fill = "transparent", color = NA),
+        panel.background = element_rect(fill = "transparent", color = NA)
+        ) +
+  labs(fill = "ALS")
+
+print(p_d)
+# save result
+ggsave(p_d, file = "./results/Fig_1D_ppi_network.png", width = 10, height = 8, dpi = 300)
+
+
+```
+\newpage 
+
+# Fig 1E: Heatmap of selected proteins
+
+```{r heatmap_plot, fig.width=10, fig.height=6}
+# ── Libraries ──────────────────────────────────────────────────────────────────
+library(tidyverse)
+library(pheatmap)
+library(RColorBrewer)
+library(ggplotify)
+library(here)
+
+# ── Load ───────────────────────────────────────────────────────────────────────
+mat_sel <- read.csv(here::here("data", "individual_data", "Fig1", 
+                               "Heatmap_PPI_cluster_mask_with_cluster_matrix.csv"),
+                    row.names = 1)
+
+annotation_col <- read.csv(here::here("data", "individual_data", "Fig1", "Heatmap_PPI_cluster_mask_with_cluster_annotation_col.csv"),
+                           row.names = 1)
+colnames(annotation_col) <- "Group"
+
+annotation_row <- read.csv(here::here("data", "individual_data", "Fig1", "Heatmap_PPI_cluster_mask_with_cluster_annotation_row.csv"),
+                           row.names = 1)
+
+
+
+# ── Align rows between matrix and row-annotation ───────────────────────────────
+common_rows <- intersect(rownames(mat_sel), rownames(annotation_row))
+mat_sel <- mat_sel[common_rows, , drop = FALSE]
+annotation_row <- annotation_row[common_rows, , drop = FALSE]
+
+stopifnot(all(c("cluster","cluster_color") %in% colnames(annotation_row)))
+annotation_row$cluster <- as.integer(annotation_row$cluster)
+
+# ── Mapping for selected clusters; others become "M<id>"; NA → "Unclustered" ──
+cluster_name_map <- c(
+  `1` = "Skeletal muscle",
+  `2` = "TNF receptor / JNK signaling activation",
+  `5` = "Extracellular matrix",
+  `6` = "Regeneration (mixed)",
+  `8` = "TGFβ activation"
+)
+
+mk_module <- function(cl) {
+  cl_chr <- as.character(cl)
+  mapped <- unname(cluster_name_map[cl_chr])    # NA where unmapped
+  ifelse(
+    !is.na(cl),
+    ifelse(!is.na(mapped), paste0("M", cl_chr, "_", mapped), paste0("M", cl_chr)),
+    "Unclustered"
+  )
+}
+
+annotation_row$module <- mk_module(annotation_row$cluster)
+
+# ── Column annotation colors (keep your OlinkGrp palette) ─────────────────────
+ann_colors <- list(
+  Group = c("CTRL" = "#63a33b", "ALS-Symptomatic" = "#b32812")
+)
+
+# ── Module legend/order/color built ONLY from what we will plot ───────────────
+# Desired legend order: numeric modules first (ascending), then Unclustered
+module_levels <- c(
+  mk_module(sort(unique(annotation_row$cluster[!is.na(annotation_row$cluster)]))),
+  "Unclustered"
+)
+
+ann_row_for_plot <- annotation_row[, "module", drop = FALSE]
+ann_row_for_plot$module <- factor(ann_row_for_plot$module, levels = module_levels)
+
+# Build the named color vector in the SAME order as module_levels
+uncl_col <- "#bdbdbd"
+
+mod_color_tab <- annotation_row |>
+  dplyr::select(module, cluster_color) |>
+  dplyr::distinct(module, .keep_all = TRUE)
+
+if ("Unclustered" %in% mod_color_tab$module) {
+  mod_color_tab$cluster_color[mod_color_tab$module == "Unclustered"] <- uncl_col
+}
+
+ord <- match(module_levels, mod_color_tab$module)
+mod_color_tab <- mod_color_tab[ord[!is.na(ord)], , drop = FALSE]
+
+stopifnot(!anyDuplicated(mod_color_tab$module))
+stopifnot(all(levels(ann_row_for_plot$module) %in% mod_color_tab$module))
+
+ann_colors$module <- setNames(mod_color_tab$cluster_color, mod_color_tab$module)
+
+# ── Order rows by module + add gaps ────────────────────────────────────────────
+row_ord <- order(ann_row_for_plot$module)
+mat_ord <- mat_sel[row_ord, , drop = FALSE]
+ann_row_for_plot <- ann_row_for_plot[row_ord, , drop = FALSE]
+
+sizes <- table(ann_row_for_plot$module)[module_levels]
+gaps_row <- cumsum(head(as.integer(sizes), -1))
+
+# ── Heatmap palette ────────────────────────────────────────────────────────────
+cell_pal <- rev(colorRampPalette(brewer.pal(11, "RdBu"))(256))
+
+# ── Draw heatmap ───────────────────────────────────────────────────────────────
+ph <- pheatmap(
+  mat_ord,
+  color             = cell_pal,
+  scale             = "row",
+  cluster_rows      = FALSE,
+  cluster_cols      = FALSE,
+  show_rownames     = FALSE,
+  show_colnames     = FALSE,
+  annotation_col    = annotation_col,                         # column annot (if present)
+  annotation_row    = ann_row_for_plot,                       # module strip only
+  annotation_colors = ann_colors,                             # names match module levels
+  gaps_row          = gaps_row,
+  fontsize_row      = 6,
+  border_color      = NA,
+  main              = ""
+)
+
+# ── Optional: wrap as ggplot (for patchwork/cowplot combos) ───────────────────
+gp <- ggplotify::as.ggplot(ph$gtable)
+p_e <- gp +
+  theme(
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA)
+  )
+
+# ── Optional: save (transparent BG) ────────────────────────────────────────────
+# ggsave(here::here("results","heatmap_modules.png"), p_e, width = 9, height = 6, dpi = 300, bg = "transparent")
+
+# save result
+ggsave(p_e, file = "./results/Fig_1E_heatmap.png", width = 10, height = 6, dpi = 300)
+
+
+```
+
+\newpage
+# Combine all plots into one figure
+```{r combine_plots, fig.width=20, fig.height=18}
+library(cowplot)
+
+# B + C stacked with vertical alignment and left-axis alignment
+bc_stack <- plot_grid(
+  p_b, p_c,
+  ncol = 1,
+  align = "v", axis = "l",
+  labels = c("B", "C"),
+  label_size = 20, label_fontface = "bold",
+  hjust = 0, vjust = 1, label_x = 0.01, label_y = 0.99
+)
+
+# A alone (labeled)
+p_a_labeled <- plot_grid(
+   NULL, p_a, NULL, 
+   ncol = 3, rel_widths = c(0.15, 0.7, 0.15),
+  hjust = 0, vjust = 1, label_x = 0.01, label_y = 0.99
+)
+
+# Left column: A (top) + (B,C) aligned stack (bottom)
+left_col <- plot_grid(
+  p_a_labeled, bc_stack,
+  labels = "A",
+  label_size = 20, label_fontface = "bold",
+  ncol = 1,
+  rel_heights = c(1, 2)  # adjust if you want A's height different
+)
+
+# Right column as before (D narrower than E)
+right_top <- plot_grid(p_d, NULL, ncol = 2, rel_widths = c(0.8, 0.2))
+right_col <- plot_grid(
+  right_top, p_e,
+  ncol = 1,
+  rel_heights = c(1, 2),
+  labels = c("D", "E"),
+  label_size = 20, label_fontface = "bold",
+  hjust = 0, vjust = 1, label_x = 0.01, label_y = 0.99
+)
+
+# Combine columns
+combo <- plot_grid(
+  left_col, right_col,
+  ncol = 2,
+  rel_widths = c(1, 1),
+  align = "h"
+)
+
+# combo
+# ggsave("combo_ABCD_E.png", combo, width = 10, height = 12, dpi = 300)
+
+print(combo)
+ggsave("./results/Fig_1_combine.png", combo, width = 20, height = 18, dpi = 300)
+ggsave("./results/Fig_1_combine.pdf", combo, width = 20, height = 18)
+ggsave("./results/Fig_1_combine.svg", combo, width = 20, height = 18)
+```
+
+
+
+\newpage
+
+# Session Info
+
+```{r}
+sessionInfo()
+
+```

@@ -1,0 +1,455 @@
+---
+title: "Figure 3"
+author: "Ximing Ran"
+date: "2025-10-15"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+hitheme: tomorrow
+highlighter: highlight.js
+
+---
+
+```{r setup, include=FALSE}
+# load libraries
+library(tidyverse)
+library(knitr)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 9,
+  fig.height = 4,
+  fig.path = "./results/Analysis_figure/"
+)
+
+theme_set(theme_bw() + theme(legend.position = "bottom"))
+knitr::kable(head(mtcars[, 1:4]), "simple")
+```
+
+```{r load_packages}
+library(arrow)
+library(OlinkAnalyze)
+library(gridExtra)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(extrafont)
+library(ggsignif)
+library(jtools)
+library(cowplot)
+library(ggpubr)
+library(lme4)
+library(lmerTest)
+
+library(knitr)
+library(kableExtra)
+library(progress)
+library(ggrepel)
+library(gprofiler2)
+library(ggrepel)
+
+
+library(ggraph)
+library(tidygraph)
+library(ggplot2)
+library(scales)
+library(ggforce)
+library(ggnewscale)
+library(dplyr)
+library(igraph)
+
+
+
+library(tidyverse)
+library(pheatmap)
+library(tidyverse)
+library(RColorBrewer)
+library(pheatmap)
+
+
+
+library(pheatmap)
+library(RColorBrewer)
+library(dplyr)
+library(tibble)
+library(stringr)
+
+
+set.seed(2024)
+```
+
+
+
+
+\newpage
+
+# Fig 2B: heatmap for protein change
+
+```{r heatmap_logistic_plot, fig.width=10, fig.height=10}
+
+
+# ── Load ───────────────────────────────────────────────────────────────────────
+df  <- read.csv(here::here("data","summary_data","Fig3","heat_1yr_wide.csv"))
+
+# Step 1: Load the required libraries
+
+# We assume your dataframe is named 'df' and contains columns:
+# 'protein', 'label', 'color_hex', and time-bin columns.
+
+cluster_name_map <- c(
+  `1` = "Skeletal muscle",
+  `2` = "TNF receptor / JNK signaling activation",
+  `5` = "Extracellular matrix",
+  `6` = "Regeneration (mixed)",
+  `8` = "TGFβ activation"
+)
+# assume `result_signficant` exists
+df <- df  %>% filter(Adj_P_value < 0.05) %>%  
+  mutate(cluster = if_else(
+    label %in% cluster_name_map, 
+    names(cluster_name_map)[match(label, cluster_name_map)], 
+    label
+  ))%>%
+  mutate(Module = case_when(
+    label == "Unclustered" ~ "Unclustered",
+    label %in% cluster_name_map ~ paste0("M", names(cluster_name_map)[match(label, cluster_name_map)], "_", label),
+    grepl("^[0-9]+$", label) ~ paste0("M", label),
+    TRUE ~ label # Default case
+  ))
+
+colnames(df) <- gsub("X\\.", "-", colnames(df))
+
+
+# Step 2: Detect time-bin columns and order them chronologically
+# This grep pattern finds columns that look like negative or positive numbers (e.g., "-15.5", "-0.5")
+time_bin_cols <- grep("^-?[0-9.]+$", names(df), value = TRUE)
+# Order the columns numerically
+time_bin_cols <- time_bin_cols[order(as.numeric(time_bin_cols))]
+
+# Step 3: Build the numeric display matrix (keeping NAs)
+# Select only the time-bin columns and convert to a matrix
+mat_display <- df %>%
+  select(all_of(time_bin_cols)) %>%
+  as.matrix()
+
+# Set the protein names as row names
+rownames(mat_display) <- df$protein
+mode(mat_display) <- "numeric"
+
+# Step 4: Prepare an imputed copy for tie-breaking
+# This function replaces NAs in a row with the row's mean
+impute_row_mean <- function(x) {
+  if (all(is.na(x))) return(rep(0, length(x)))
+  x[is.na(x)] <- mean(x, na.rm = TRUE)
+  x
+}
+mat_imputed <- t(apply(mat_display, 1, impute_row_mean))
+
+# Step 5: Compute the "first non-NA position" for each row to guide sorting
+first_non_na_pos <- apply(mat_display, 1, function(r) {
+  idx <- which(!is.na(r))
+  if (length(idx) == 0) return(Inf)
+  idx[1]
+})
+
+# Step 6: Compute a tie-breaker value (row mean on the imputed matrix)
+row_mean_imputed <- rowMeans(mat_imputed, na.rm = TRUE)
+
+# Step 7: Create the final ordering
+# Add sorting metrics to the dataframe and arrange it.
+# Primary sort: by Module (using a custom numeric key). Secondary sort: by first non-NA position.
+df_ordered <- df %>%
+  mutate(
+    first_non_na_pos = first_non_na_pos,
+    row_mean_imputed = row_mean_imputed,
+    # Create a numeric key for sorting modules correctly
+    ModuleSortKey = ifelse(
+      Module == "Unclustered",
+      999, # A large number to ensure "Unclustered" is always last
+      as.numeric(str_extract(Module, "\\d+")) # Extracts the number from module names like "M1" or "M1_Skeletal"
+    )
+  ) %>%
+  arrange(ModuleSortKey, first_non_na_pos, desc(row_mean_imputed))
+
+# Step 8: Reorder the display matrix based on the new dataframe order
+mat_display_ord <- mat_display[df_ordered$protein, , drop = FALSE]
+
+# Step 9: Create the row annotation and calculate gap positions
+annotation_row <- data.frame(Module = factor(df_ordered$Module))
+rownames(annotation_row) <- rownames(mat_display_ord)
+
+# Find the index of the last row in each Module group to create gaps
+gap_indices <- which(df_ordered$Module[-1] != df_ordered$Module[-nrow(df_ordered)])
+
+# Create a mapping from Module label to its color
+module_to_color <- df_ordered %>%
+  select(Module, cluster_color) %>%
+  distinct() %>%
+  deframe()
+annotation_colors <- list(Module = module_to_color)
+
+# Step 10: Define color palette and symmetric breaks
+max_abs <- max(abs(mat_imputed), na.rm = TRUE)
+breaks <- seq(-max_abs, max_abs, length.out = 101)
+colors <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(100)
+
+# Step 11: Create a matrix for displaying numbers on the heatmap
+# This matrix will have NAs replaced with empty strings.
+number_matrix <- mat_display_ord
+number_matrix[!is.na(number_matrix)] <- round(number_matrix[!is.na(number_matrix)], 2)
+number_matrix[is.na(number_matrix)] <- ""
+
+
+colnames(mat_display_ord)<- paste0("[", seq(-16, -1), ",", seq(-15, 0), ")")
+
+# Step 12: Draw the heatmap
+ph<-pheatmap(
+  mat_display_ord,
+  color = colors,
+  breaks = breaks,
+  cluster_rows = FALSE, # Rows are already ordered
+  cluster_cols = FALSE, # Keep original time order
+  show_rownames = TRUE, # Use protein names (from matrix rownames) as labels
+  show_colnames = TRUE,
+  annotation_row = annotation_row,
+  annotation_colors = annotation_colors,
+  gaps_row = gap_indices, # Add gaps between clusters
+  display_numbers = number_matrix, # Show rounded numbers on cells
+  fontsize_number = 9, # Adjust font size of the numbers
+  
+  fontsize_row = 9,
+   annotation_names_row = F,
+  fontsize_col = 9,
+   angle_col =0,
+  # main = "Proteins Grouped by Module and Ordered by First Appearance",
+  border_color = "black",
+  number_color      = "black",
+  na_col = "white"
+)
+
+
+
+
+
+
+# ── Top-right legend matching the global AUC scale ────────────────────────────
+p_b <- ggplotify::as.ggplot(ph$gtable) +
+  theme(
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA)
+  )
+
+ggsave("./results/Fig3B-heatmap_for_pre_ALS_change_2025-10-16.png",
+  p_b,
+  
+  width = 20, height = 18, units = "in", dpi = 300
+)
+ggsave("./results/Fig3B-heatmap_for_pre_ALS_change_2025-10-16.pdf",
+  p_b,
+  
+  width = 20, height = 18, units = "in"
+)
+ggsave("./results/Fig3B-heatmap_for_pre_ALS_change_2025-10-16.svg",
+  p_b,
+  
+  width = 20, height = 18, units = "in"
+)
+
+```
+
+
+```{r heatmap_logistic_plot_all, fig.width=20, fig.height=30}
+
+
+# ── Load ───────────────────────────────────────────────────────────────────────
+df  <- read.csv(here::here("data","summary_data","Fig3","heat_1yr_wide.csv"))
+
+# Step 1: Load the required libraries
+
+# We assume your dataframe is named 'df' and contains columns:
+# 'protein', 'label', 'color_hex', and time-bin columns.
+
+cluster_name_map <- c(
+  `1` = "Skeletal muscle",
+  `2` = "TNF receptor / JNK signaling activation",
+  `5` = "Extracellular matrix",
+  `6` = "Regeneration (mixed)",
+  `8` = "TGFβ activation"
+)
+# assume `result_signficant` exists
+df <- df  %>% 
+  # filter(Adj_P_value < 0.05) %>%  
+  mutate(cluster = if_else(
+    label %in% cluster_name_map, 
+    names(cluster_name_map)[match(label, cluster_name_map)], 
+    label
+  ))%>%
+  mutate(Module = case_when(
+    label == "Unclustered" ~ "Unclustered",
+    label %in% cluster_name_map ~ paste0("M", names(cluster_name_map)[match(label, cluster_name_map)], "_", label),
+    grepl("^[0-9]+$", label) ~ paste0("M", label),
+    TRUE ~ label # Default case
+  ))
+
+colnames(df) <- gsub("X\\.", "-", colnames(df))
+
+
+# Step 2: Detect time-bin columns and order them chronologically
+# This grep pattern finds columns that look like negative or positive numbers (e.g., "-15.5", "-0.5")
+time_bin_cols <- grep("^-?[0-9.]+$", names(df), value = TRUE)
+# Order the columns numerically
+time_bin_cols <- time_bin_cols[order(as.numeric(time_bin_cols))]
+
+# Step 3: Build the numeric display matrix (keeping NAs)
+# Select only the time-bin columns and convert to a matrix
+mat_display <- df %>%
+  select(all_of(time_bin_cols)) %>%
+  as.matrix()
+
+# Set the protein names as row names
+rownames(mat_display) <- df$protein
+mode(mat_display) <- "numeric"
+
+# Step 4: Prepare an imputed copy for tie-breaking
+# This function replaces NAs in a row with the row's mean
+impute_row_mean <- function(x) {
+  if (all(is.na(x))) return(rep(0, length(x)))
+  x[is.na(x)] <- mean(x, na.rm = TRUE)
+  x
+}
+mat_imputed <- t(apply(mat_display, 1, impute_row_mean))
+
+# Step 5: Compute the "first non-NA position" for each row to guide sorting
+first_non_na_pos <- apply(mat_display, 1, function(r) {
+  idx <- which(!is.na(r))
+  if (length(idx) == 0) return(Inf)
+  idx[1]
+})
+
+# Step 6: Compute a tie-breaker value (row mean on the imputed matrix)
+row_mean_imputed <- rowMeans(mat_imputed, na.rm = TRUE)
+
+# Step 7: Create the final ordering
+# Add sorting metrics to the dataframe and arrange it.
+# Primary sort: by Module (using a custom numeric key). Secondary sort: by first non-NA position.
+df_ordered <- df %>%
+  mutate(
+    first_non_na_pos = first_non_na_pos,
+    row_mean_imputed = row_mean_imputed,
+    # Create a numeric key for sorting modules correctly
+    ModuleSortKey = ifelse(
+      Module == "Unclustered",
+      999, # A large number to ensure "Unclustered" is always last
+      as.numeric(str_extract(Module, "\\d+")) # Extracts the number from module names like "M1" or "M1_Skeletal"
+    )
+  ) %>%
+  arrange(ModuleSortKey, first_non_na_pos, desc(row_mean_imputed))
+
+# Step 8: Reorder the display matrix based on the new dataframe order
+mat_display_ord <- mat_display[df_ordered$protein, , drop = FALSE]
+
+# Step 9: Create the row annotation and calculate gap positions
+annotation_row <- data.frame(Module = factor(df_ordered$Module))
+rownames(annotation_row) <- rownames(mat_display_ord)
+
+# Find the index of the last row in each Module group to create gaps
+gap_indices <- which(df_ordered$Module[-1] != df_ordered$Module[-nrow(df_ordered)])
+
+
+# Use run length encoding to find module boundaries
+module_lengths <- rle(df_ordered$Module)$lengths
+gap_indices <- cumsum(module_lengths)[-length(module_lengths)]  # Remove the last one (no gap after final group)
+gap_indices
+
+# Create a mapping from Module label to its color
+module_to_color <- df_ordered %>%
+  select(Module, cluster_color) %>%
+  distinct() %>%
+  deframe()
+annotation_colors <- list(Module = module_to_color)
+
+# Step 10: Define color palette and symmetric breaks
+max_abs <- max(abs(mat_imputed), na.rm = TRUE)
+breaks <- seq(-max_abs, max_abs, length.out = 101)
+colors <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(100)
+
+# Step 11: Create a matrix for displaying numbers on the heatmap
+# This matrix will have NAs replaced with empty strings.
+number_matrix <- mat_display_ord
+number_matrix[!is.na(number_matrix)] <- round(number_matrix[!is.na(number_matrix)], 2)
+number_matrix[is.na(number_matrix)] <- ""
+
+
+colnames(mat_display_ord)<- paste0("[", seq(-16, -1), ",", seq(-15, 0), ")")
+
+# Step 12: Draw the heatmap
+ph<-pheatmap(
+  mat_display_ord,
+  color = colors,
+  breaks = breaks,
+  cluster_rows = FALSE, # Rows are already ordered
+  cluster_cols = FALSE, # Keep original time order
+  show_rownames = TRUE, # Use protein names (from matrix rownames) as labels
+  show_colnames = TRUE,
+  annotation_row = annotation_row,
+  annotation_colors = annotation_colors,
+  # gaps_row = gap_indices, # Add gaps between clusters
+  display_numbers = number_matrix, # Show rounded numbers on cells
+  fontsize_number = 9, # Adjust font size of the numbers
+  
+  fontsize_row = 9,
+   annotation_names_row = F,
+  fontsize_col = 9,
+   angle_col =0,
+  # main = "Proteins Grouped by Module and Ordered by First Appearance",
+  border_color = "black",
+  number_color      = "black",
+  na_col = "white"
+)
+
+
+
+
+
+
+# ── Top-right legend matching the global AUC scale ────────────────────────────
+p_b <- ggplotify::as.ggplot(ph$gtable) +
+  theme(
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA)
+  )
+
+ggsave("./results/Fig3B-heatmap_for_pre_ALS_change_all_2025-10-16.png",
+  p_b,
+  
+  width = 12, height = 20, units = "in", dpi = 300
+)
+ggsave("./results/Fig3B-heatmap_for_pre_ALS_change_all_2025-10-16.pdf",
+  p_b,
+  
+  width = 20, height = 18, units = "in"
+)
+ggsave("./results/Fig3B-heatmap_for_pre_ALS_change_all_2025-10-16.svg",
+  p_b,
+  
+  width = 20, height = 18, units = "in"
+)
+
+```
+\newpage
+
+# Session Info
+
+```{r}
+sessionInfo()
+
+```

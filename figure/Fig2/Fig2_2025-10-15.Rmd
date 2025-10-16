@@ -1,0 +1,822 @@
+---
+title: "Figure 2"
+author: "Ximing Ran"
+date: "2025-10-15"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+hitheme: tomorrow
+highlighter: highlight.js
+
+---
+
+```{r setup, include=FALSE}
+# load libraries
+library(tidyverse)
+library(knitr)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 9,
+  fig.height = 4,
+  fig.path = "./results/Analysis_figure/"
+)
+
+theme_set(theme_bw() + theme(legend.position = "bottom"))
+knitr::kable(head(mtcars[, 1:4]), "simple")
+```
+
+```{r load_packages}
+library(arrow)
+library(OlinkAnalyze)
+library(gridExtra)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(extrafont)
+library(ggsignif)
+library(jtools)
+library(cowplot)
+library(ggpubr)
+library(lme4)
+library(lmerTest)
+
+library(knitr)
+library(kableExtra)
+library(progress)
+library(ggrepel)
+library(gprofiler2)
+library(ggrepel)
+
+
+library(ggraph)
+library(tidygraph)
+library(ggplot2)
+library(scales)
+library(ggforce)
+library(ggnewscale)
+library(dplyr)
+library(igraph)
+
+
+
+library(tidyverse)
+library(pheatmap)
+library(tidyverse)
+library(RColorBrewer)
+library(pheatmap)
+
+
+library(purrr)
+library(UpSetR)
+
+set.seed(2024)
+```
+
+
+
+
+\newpage
+
+# Fig 2A: heatmap for single Logistic regression analysis
+
+```{r heatmap_logistic_plot, fig.width=7, fig.height=22}
+
+
+# ── Load ───────────────────────────────────────────────────────────────────────
+result_df  <- read.csv(here::here("data","summary_data","Fig2","All_model_result_final_2025-10-15.csv"))
+annotation_row <- read.csv(
+  here::here("data","summary_data","Fig2","Heatmap_PPI_cluster_mask_with_cluster_annotation_row.csv"),
+  row.names = 1
+)
+
+# ── Palette ───────────────────────────────────────────────────────────────────
+# cell_pal <- rev(colorRampPalette(brewer.pal(11, "RdBu"))(256))
+# cell_pal <- rev(colorRampPalette(brewer.pal(11, "Reds"))(256))
+cell_pal <- colorRampPalette(brewer.pal(11, "Blues"))(256)
+
+# ── Build heat matrix: rows = Protein, cols = T, vals = AUC ───────────────────
+result_df_LR <- result_df %>% filter(Model == "LR_single")
+
+heat_mat_raw <- result_df_LR %>%
+  select(Protein, T, AUC) %>%
+  mutate(T = as.numeric(T)) %>%
+  arrange(T) %>%
+  mutate(T = as.character(T)) %>%
+  pivot_wider(names_from = T, values_from = AUC) %>%
+  column_to_rownames("Protein") %>%
+  as.matrix()
+
+# keep T columns in numeric order
+heat_mat_raw <- heat_mat_raw[, order(as.numeric(colnames(heat_mat_raw))), drop = FALSE]
+
+# ── Module annotation from clusters ────────────────────────────────────────────
+stopifnot(all(c("cluster","cluster_color") %in% colnames(annotation_row)))
+annotation_row$cluster <- as.integer(annotation_row$cluster)
+
+cluster_name_map <- c(
+  `1` = "Skeletal muscle",
+  `2` = "TNF receptor / JNK signaling activation",
+  `5` = "Extracellular matrix",
+  `6` = "Regeneration (mixed)",
+  `8` = "TGFβ activation"
+)
+mk_module <- function(cl){
+  cl_chr <- as.character(cl)
+  mapped <- unname(cluster_name_map[cl_chr])
+  ifelse(!is.na(cl),
+         ifelse(!is.na(mapped), paste0("M", cl_chr, "_", mapped), paste0("M", cl_chr)),
+         "Unclustered")
+}
+annotation_row$module <- mk_module(annotation_row$cluster)
+
+# align rows across matrix and annotation
+common_prot <- intersect(rownames(heat_mat_raw), rownames(annotation_row))
+heat_mat_raw <- heat_mat_raw[common_prot, , drop = FALSE]
+ann_row <- annotation_row[common_prot, , drop = FALSE]
+
+# legend order for modules
+module_levels <- c(
+  mk_module(sort(unique(ann_row$cluster[!is.na(ann_row$cluster)]))),
+  "Unclustered"
+)
+ann_row_for_plot <- data.frame(
+  module = factor(ann_row$module, levels = module_levels),
+  row.names = rownames(ann_row)
+)
+
+# module colors (use cluster_color; gray for Unclustered)
+uncl_col <- "#bdbdbd"
+mod_color_tab <- ann_row |>
+  distinct(module, .keep_all = TRUE) |>
+  select(module, cluster_color)
+if ("Unclustered" %in% mod_color_tab$module) {
+  mod_color_tab$cluster_color[mod_color_tab$module == "Unclustered"] <- uncl_col
+}
+mod_color_tab <- mod_color_tab[match(module_levels, mod_color_tab$module), , drop = FALSE]
+ann_colors <- list(module = setNames(mod_color_tab$cluster_color, mod_color_tab$module))
+
+# ── Cluster rows *within* each module (ordering only) ─────────────────────────
+row_dist_method   <- "correlation"   # or "euclidean"
+row_hclust_method <- "ward.D2"
+scale_rows <- function(m) t(scale(t(m)))
+row_dist <- function(m, method = "euclidean"){
+  if (method == "correlation") as.dist(1 - cor(t(m), use = "pairwise.complete.obs"))
+  else dist(m, method = method)
+}
+
+modules_in_order <- levels(ann_row_for_plot$module)
+row_idx_list <- split(seq_len(nrow(heat_mat_raw)), ann_row_for_plot$module)
+new_row_order <- integer(0)
+for (mod in modules_in_order) {
+  idx <- row_idx_list[[mod]]
+  if (length(idx) == 0) next
+  submat <- heat_mat_raw[idx, , drop = FALSE]
+  # use scaled matrix for *distance only*, not for plotting
+  submat_scaled <- suppressWarnings(scale_rows(submat))
+  if (nrow(submat_scaled) > 2) {
+    d  <- row_dist(submat_scaled, method = row_dist_method)
+    hc <- hclust(d, method = row_hclust_method)
+    ord <- idx[hc$order]
+  } else if (nrow(submat_scaled) == 2) {
+    ord <- idx[order(rowMeans(submat_scaled, na.rm = TRUE), decreasing = TRUE)]
+  } else {
+    ord <- idx
+  }
+  new_row_order <- c(new_row_order, ord)
+}
+# apply within-module order & gaps
+mat_ord <- heat_mat_raw[new_row_order, , drop = FALSE]
+ann_row_for_plot <- ann_row_for_plot[new_row_order, , drop = FALSE]
+sizes <- table(ann_row_for_plot$module)[modules_in_order]
+gaps_row <- cumsum(head(as.integer(sizes), -1))
+
+# ── GLOBAL color scale (same for all rows) using *raw AUC* ────────────────────
+# Option 1: automatic global limits from data
+auc_minmax <- range(mat_ord, na.rm = TRUE)
+
+# Option 2 (recommended for AUC): lock to a fixed range for comparability
+# auc_minmax <- c(0.50, 1.00)   # uncomment to pin the scale
+
+breaks <- seq(auc_minmax[1], auc_minmax[2], length.out = length(cell_pal) + 1)
+# breaks <- seq(0, 0.82, length.out = length(cell_pal) + 1)
+# numbers to display = raw AUC values
+numbers_mat <- ifelse(is.na(mat_ord), "", sprintf("%.2f", mat_ord))
+
+# ── Draw heatmap (no internal scaling; one global legend) ─────────────────────
+ph <- pheatmap(
+  mat_ord,                        # PLOT RAW AUC (no scaling)
+  color             = cell_pal,
+  breaks            = breaks,     # global scale for all rows
+  scale             = "none",
+  cluster_rows      = FALSE,      # already ordered within modules
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  show_colnames     = TRUE,       # T on top
+  annotation_row    = ann_row_for_plot,
+  annotation_colors = ann_colors,
+  gaps_row          = gaps_row,
+  display_numbers   = numbers_mat,
+  number_color      = "black",
+  fontsize_number   = 8.5,
+  border_color      = NA,
+    angle_col =0,
+  legend            = TRUE,      # we add a top-right legend next
+  # main              = "AUC (global color scale)"
+)
+
+# ── Top-right legend matching the global AUC scale ────────────────────────────
+p_a <- ggplotify::as.ggplot(ph$gtable) +
+  theme(
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA)
+  )
+ggsave("./results/Fig2A_heatmap_logistic_plot_2025-10-15.png",
+  p_a,
+  
+  width = 10, height = 22, units = "in", dpi = 300
+)
+
+```
+
+\newpage
+# Fig 2B: Heapmat for optimial model
+
+```{r heatmap_optimal_model_plot, fig.width=8, fig.height=4}
+
+
+# ── Exclude LR_single ──────────────────────────────────────────────────────────
+result_df_ML <- result_df %>%
+  filter(Model != "LR_single")
+
+# ── Best AUC per (Model, T) ───────────────────────────────────────────────────
+best_auc <- result_df_ML %>%
+  mutate(T = as.numeric(T)) %>%                    # ensure numeric-like
+  group_by(Model, T) %>%
+  summarise(BestAUC = max(AUC, na.rm = TRUE), .groups = "drop")
+
+# ── Wide heat matrix: rows = Model, cols = T, vals = BestAUC ──────────────────
+heat_mat <- best_auc %>%
+  mutate(T = as.character(T)) %>%
+  pivot_wider(names_from = T, values_from = BestAUC) %>%
+  arrange(Model) %>%
+  column_to_rownames("Model") %>%
+  as.matrix()
+
+# Order columns by numeric T
+heat_mat <- heat_mat[, order(as.numeric(colnames(heat_mat))), drop = FALSE]
+
+# (Optional) drop rows that are completely NA
+all_na_rows <- apply(heat_mat, 1, function(r) all(is.na(r)))
+if (any(all_na_rows)) heat_mat <- heat_mat[!all_na_rows, , drop = FALSE]
+
+# ── Sort rows by average AUC (descending), tie-break by max AUC ───────────────
+row_order <- order(
+  rowMeans(heat_mat, na.rm = TRUE),
+  apply(heat_mat, 1, max, na.rm = TRUE),
+  decreasing = TRUE
+)
+heat_mat <- heat_mat[row_order, , drop = FALSE]
+
+# ── Global color scale (same for all rows) ─────────────────────────────────────
+# cell_pal <- rev(colorRampPalette(brewer.pal(11, "RdBu"))(256))
+cell_pal <- colorRampPalette(brewer.pal(11, "Blues"))(256)
+
+# Recommended fixed AUC range for comparability across figures:
+auc_minmax <- c(0.50, 1.00)
+
+# If your data fall outside this range and you prefer data-driven limits, use:
+# auc_minmax <- range(heat_mat, na.rm = TRUE)
+
+breaks <- seq(auc_minmax[1], auc_minmax[2], length.out = length(cell_pal) + 1)
+
+# Numbers on tiles
+numbers_mat <- ifelse(is.na(heat_mat), "", sprintf("%.3f", heat_mat))
+# rename rows
+rename_map <- c(
+  "LR"          = "Logistic Regression",
+  "RF"          = "Random Forest",
+  "Elastic_Net" = "Elastic Net"
+)
+
+rn_old <- rownames(heat_mat)
+rn_new <- ifelse(rn_old %in% names(rename_map), rename_map[rn_old], rn_old)
+rownames(heat_mat) <- rn_new
+
+# (optional) rebuild numbers & plot again
+numbers_mat <- ifelse(is.na(heat_mat), "", sprintf("%.3f", heat_mat))
+
+ph <- pheatmap(
+  heat_mat,
+  color           = cell_pal,
+  scale           = "none",
+  cluster_rows    = FALSE,
+  cluster_cols    = FALSE,
+  show_rownames   = TRUE,
+  show_colnames   = TRUE,
+  display_numbers = numbers_mat,
+  number_color    = "black",
+  border_color    = NA,
+  fontsize =20,
+  fontsize_row    = 20,
+  angle_col =0
+  # main            = "Best AUC per Model × T"
+)
+
+
+# ── Top-right legend matching the global AUC scale ────────────────────────────
+p_b <- ggplotify::as.ggplot(ph$gtable) +
+  theme(
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA)
+  )
+ggsave("./results/Fig2B_heatmap_optimal_model_plot_2025-10-15.png",
+  p_b,
+  width = 8, height = 4, units = "in", dpi = 300
+)
+```
+\newpage
+# Fig 2C: Upset plot for optimal model
+
+```{r upset_optimal_model_plot, fig.width=9, fig.height=4}
+result_LR <- result_df %>%
+  filter(Model == "LR")
+
+
+# ---------- Start from result_LR ----------
+df <- result_LR %>%
+  mutate(
+    Index = as.integer(Index),
+    T = as.character(T),
+    MaxFlag = as.character(MaxFlag)
+  )
+
+# ---------- Step 1: Identify first MAX per T ----------
+first_max_per_T <- df %>%
+  group_by(T) %>%
+  mutate(
+    is_max = if (any(MaxFlag == "MAX", na.rm = TRUE)) MaxFlag == "MAX"
+    else AUC == max(AUC, na.rm = TRUE)
+  ) %>%
+  filter(is_max) %>%
+  arrange(Index) %>%
+  slice(1) %>%
+  ungroup() %>%
+  rename(N_star = Index) %>%
+  select(T, N_star, Protein, AUC)
+
+# ---------- Step 2: Get top-N (N_star) proteins per T ----------
+protein_sets_by_T <- df %>%
+  inner_join(first_max_per_T %>% select(T, N_star), by = "T") %>%
+  filter(Index <= N_star) %>%
+  arrange(T, Index) %>%
+  group_by(T) %>%
+  summarise(Proteins = list(Protein), .groups = "drop") %>%
+  { set_names(.$Proteins, .$T) }
+
+# ---------- Step 3: Build 0/1 membership matrix ----------
+T_order <- c("0.5", "1", "2", "3", "5")  # desired order
+all_proteins <- sort(unique(unlist(protein_sets_by_T)))
+
+upset_df <- tibble(Protein = all_proteins)
+for (tt in T_order) {
+  upset_df[[tt]] <- as.integer(all_proteins %in% protein_sets_by_T[[tt]])
+}
+
+# ---------- Step 4: Convert to data.frame for UpSetR ----------
+up_df_r <- upset_df %>%
+  select(all_of(T_order)) %>%
+  mutate(across(everything(), as.integer)) %>%
+  as.data.frame()
+
+# ---------- Step 5: Plot UpSetR ----------
+UpSetR::upset(
+  up_df_r,
+  sets = T_order,
+  nsets = length(T_order),
+  keep.order = TRUE,
+  # order.by = "freq",
+  # decreasing = TRUE,
+  mb.ratio = c(0.7, 0.3),
+  sets.bar.color = "gray60",
+  text.scale = 1.5,
+  # query.legend = "Highlighted overlaps",
+  queries = list(
+    # Highlight all 5 sets: 0.5 & 1 & 2 & 3 & 5
+    list(
+      query = intersects,
+      params = list("0.5", "1", "2", "3", "5"),
+      color = "#db2622",
+      active = TRUE
+    ),
+    # Highlight 4 sets: 1 & 2 & 3 & 5
+    list(
+      query = intersects,
+      params = list("1", "2", "3", "5"),
+      color = "#226ca7",
+      active = TRUE
+    ),
+    list(
+      query = intersects,
+      params = list("1", "2", "3"),
+      color = "#d1571e",
+      active = TRUE
+    )
+  )
+)
+
+
+# 
+# p_c_as_gg <- ggplotify::as.ggplot(upset_grob)  # if you prefer a ggplot-like object
+# cowplot::plot_grid(p_b, p_c_as_gg, ncol = 2, rel_widths = c(1, 1.2))
+
+```
+
+
+
+\newpage
+
+
+```{r}
+library(tidyverse)
+library(patchwork)
+
+# Create sample data
+set.seed(32353)
+schools_dat <- tibble(
+  school_id = paste('School', LETTERS),
+  below_in_math = sample(
+    c(TRUE, FALSE), 
+    length(school_id), 
+    replace = TRUE
+  ),
+  below_in_reading = sample(
+    c(TRUE, FALSE), 
+    length(school_id), 
+    replace = TRUE
+  ),
+  below_in_writing = sample(
+    c(TRUE, FALSE), 
+    length(school_id), 
+    replace = TRUE
+  ),
+)
+
+# Note: You need to create upset_df before running this code
+# This assumes upset_df exists with columns: Protein, 0.5, 1, 2, 3, 5
+
+# Convert upset_df columns to logical
+upset_df_log <- upset_df %>%
+  mutate(across(c(`0.5`, `1`, `2`, `3`, `5`), as.logical))
+
+# Create combinations data
+combinations_dat <- upset_df_log %>%
+  mutate(
+    combination = pmap(
+      list(`0.5`,`1`,`2`,`3`,`5`),
+      \(lgl1, lgl2, lgl3, lgl4, lgl5) {
+        c('T_0.5', 'T_1', 'T_2', 'T_3', 'T_5')[c(lgl1, lgl2, lgl3, lgl4, lgl5)] 
+      }
+    )
+  )
+
+# Count combinations
+counts_combinations <- upset_df_log  |>  
+  mutate(
+    combination = pmap_chr(
+      list(`0.5`, `1`, `2`, `3`, `5`),
+      \(lgl1, lgl2, lgl3, lgl4, lgl5) {
+        c('T_0.5', 'T_1', 'T_2', 'T_3', 'T_5')[c(lgl1, lgl2, lgl3, lgl4, lgl5)] |> 
+          paste(collapse = ',')
+      }
+    )
+  ) |> 
+  count(combination)
+
+# Reorder combinations by count (largest on left, smallest on right)
+counts_combinations <- counts_combinations |> 
+  mutate(
+    n_sets = str_count(combination, "T_")
+  )|> 
+  mutate(
+    fill_color = case_when(
+      combination == "T_1,T_2,T_3" ~ "#d1571e",
+      combination == "T_1,T_2,T_3,T_5" ~ "#226ca7",
+      combination == "T_0.5,T_1,T_2,T_3,T_5" ~ "#db2622",
+      TRUE ~ "black"
+    )
+  )
+
+
+# Reorder combinations by set count first, then by n
+counts_combinations <- counts_combinations |> 
+  arrange(n_sets, desc(n)) |> 
+  mutate(
+    combination = fct_inorder(combination)
+  )
+
+
+# Count occurrences by subject
+counts_of_subjects <- upset_df_log |> 
+  pivot_longer(
+    cols = -Protein,
+    names_to = 'subject',
+    values_to = 'below',
+    names_prefix = 'below_in_'
+  ) |> 
+  summarize(
+    counts = sum(below),
+    .by = subject,
+  ) 
+
+# Add "T_" prefix to subject names and set factor levels
+counts_of_subjects <- counts_of_subjects |> 
+  mutate(
+    subject = paste0('T_', subject),
+    subject = factor(subject, levels = c('T_0.5', 'T_1', 'T_2', 'T_3', 'T_5'))
+  )
+
+
+# Create bar chart for combinations with values on top
+bar_chart <- counts_combinations   |> 
+  ggplot(aes(x = combination, y = n)) +
+  geom_col(aes(fill = fill_color), width = 0.6) +
+  scale_fill_identity() +
+  geom_text(aes(label = n, color = fill_color), vjust = -0.5, size = 4) +
+  scale_color_identity() +
+  scale_y_continuous(
+    limits = c(0, max(counts_combinations$n) * 1.15),
+    expand = c(0, 0)
+  ) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 20)
+  ) +
+  labs(x = element_blank(), y = "Intersection Size")
+
+# Prepare points data for the connection plot
+points_data <- counts_combinations |> 
+  mutate(
+    subjects = map(
+      combination, 
+      ~str_split_1(as.character(.), ',')
+    )
+  ) |> 
+  unnest(subjects) |> 
+  mutate(
+    subjects = factor(
+      subjects, 
+      levels = c('T_0.5', 'T_1', 'T_2', 'T_3', 'T_5')
+    ),
+    combination = factor(
+      combination,
+      levels = levels(counts_combinations$combination)
+    )
+  ) |> 
+  filter(!is.na(subjects))
+
+# Create point chart showing which subjects are in each combination
+point_chart <- points_data |> 
+  ggplot(aes(x = combination, y = subjects)) +
+  geom_line(aes(group = combination, color = fill_color), linewidth = 3) +
+  geom_point(aes(color = fill_color), size = 8) +
+  scale_color_identity() +
+  # theme_minimal(base_size = 16, base_family = 'Source Sans Pro') +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(hjust = 0.5, size = 14),
+    axis.title.y = element_text(size = 20)
+  ) +
+  labs(x = element_blank(), y = "Time Points") +
+  scale_x_discrete(drop = FALSE)
+
+# Create horizontal bar chart for subject counts with values
+subject_bars <- counts_of_subjects |> 
+  # mutate(subject = fct_reorder(subject, counts)) |>
+  ggplot(aes(x = -counts, y = subject)) +
+  geom_col(width = 0.6, fill = 'black') +
+  geom_text(aes(label = counts, x = -counts-4), hjust = -0.2, size = 5, color = 'black') +
+  theme(
+    axis.text.y = element_text(hjust = 0.5, size = 14),
+    axis.text.x = element_text(size = 14),
+    # axis.text.y = element_blank(),
+    axis.title.y = element_text(size = 14)
+  ) +
+  scale_x_continuous(
+    labels = abs,
+    limits = c(-max(counts_of_subjects$counts) * 1.15, 0),
+    expand = c(0, 0)
+  ) +
+  labs(x = element_blank(), y = element_blank())
+
+
+
+
+
+
+
+
+# Define layout for patchwork
+layout <- '
+##AAAA
+BBCCCC'
+
+# Combine all plots
+p_c<- bar_chart + 
+  subject_bars + 
+  point_chart +
+  plot_layout(design = layout)  +
+  theme(
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA)
+  )
+ 
+ggsave("./results/Fig2C_upset_optimal_model_plot_2025-10-15.png",
+  p_c,
+  width = 20, height = 8, units = "in", dpi = 300
+)
+```
+
+```{r combine_bc, fig.width=20, fig.height=8}
+p_c
+```
+
+
+
+\newpage
+# Fig 2D: ROC plot for different pannel
+
+```{r line_optimal_model_plot, fig.width=15, fig.height=20}
+library(ggplot2)
+library(dplyr)
+roc_df  <- read.csv(here::here("data","summary_data","Fig2","ROC_results_LR_2025-10-15.csv"))
+# Filter for only Panel_1, Panel_15, Panel_19 and rename Panel_1 to NEFL
+roc_df <- roc_df %>%
+  filter(Protein_Set %in% c("Panel_1", "Panel_15", "Panel_19")) %>%
+  mutate(Protein_Set = ifelse(Protein_Set == "Panel_1", "NEFL", Protein_Set))
+
+
+library(ggplot2)
+library(dplyr)
+library(scales)
+
+# Get unique T values
+t_values <- unique(roc_df$T)
+
+# Create a plot for each T value
+plots <- lapply(t_values, function(t_val) {
+  # Filter data for this T value
+  data_t <- roc_df %>% filter(T == t_val)
+  
+  # Get AUC info for legend labels
+  auc_info <- data_t %>% 
+    group_by(Protein_Set) %>% 
+    summarise(AUC = unique(Train_CV_AUC), .groups = 'drop') %>%
+    arrange(Protein_Set)
+  
+  # Create legend labels with AUC - each on a new line
+  legend_labels <- paste0(auc_info$Protein_Set, " (AUC = ", 
+                          round(auc_info$AUC, 3), ")")
+  names(legend_labels) <- auc_info$Protein_Set
+  
+  # Create the plot
+  p <- ggplot(data_t, aes(x = specificities, y = sensitivities,
+                          color = Protein_Set, group = Protein_Set)) +
+    geom_line(linewidth = 1) +
+    geom_abline(intercept = 1, slope = -1,
+                linetype = "dashed", color = "gray50", linewidth = 0.5) +
+    scale_x_continuous(labels = percent_format(accuracy = 1),
+                       breaks = seq(0, 1, 0.2),
+                       limits = c(0, 1.),
+                       expand = c(0, 0)) +
+    scale_y_continuous(labels = percent_format(accuracy = 1),
+                       breaks = seq(0, 1, 0.2),
+                       limits = c(0, 1.0),
+                       expand = c(0, 0.001)) +
+    scale_color_discrete(labels = legend_labels) +
+    labs(
+      title = paste0("T = ", t_val),
+      x = "1 - Specificity (False Positive Rate)",
+      y = "Sensitivity (True Positive Rate)",
+      color = NULL
+    ) +
+    theme_bw() +
+    theme(
+      plot.title            = element_text(hjust = 0.5, size = 14, face = "bold"),
+      legend.position       = c(0.25, 0.25),
+      legend.background     =  element_rect(fill = "transparent", color = NA),
+      legend.margin         = margin(5, 5, 5, 5),
+      legend.text           = element_text(size = 9),
+      panel.grid.minor      = element_blank(),
+      axis.text             = element_text(size = 10),
+      
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    panel.background = element_rect(fill = "transparent", color = NA),
+      axis.title            = element_text(size = 11)
+    ) +
+    coord_equal() +
+    guides(color = guide_legend(nrow = 3, ncol = 1, byrow = TRUE))
+  
+  
+  return(p)
+})
+
+# # Display all plots
+# for(i in seq_along(plots)) {
+#   print(plots[[i]])
+# }
+
+
+p_d<- wrap_plots(plots, ncol = 2, nrow = 3)  
+
+print(p_d)
+
+p_d <- p_d+
+  theme(
+  )
+
+ggsave("./results/Fig2D_line_optimal_model_plot_2025-10-15.png",
+  p_d,
+  width = 15, height = 20, units = "in", dpi = 300
+)
+```
+
+
+\newpage
+
+# Fig 2: Combine all panels
+
+```{r combine_all, fig.width=20, fig.height=30}
+
+
+library(cowplot)
+
+
+# p_a_adj <- p_a + theme(plot.margin = margin(t = 5.5, r = 30, b = 5.5, l = 5.5))
+# A alone (labeled)
+p_a_labeled <- plot_grid(
+  NULL, p_a, NULL, 
+  ncol = 3, rel_widths = c(0.05, 1, 0),
+  hjust = 0, vjust = 1, label_x = 0.01, label_y = 0.99
+)
+
+
+# Make sure these are ggplot objects (not patchwork objects)
+# If any are patchwork objects, wrap with ggplotify::as.ggplot()
+
+aligned <- cowplot::align_plots(p_b, p_c, p_d, align = "v", axis = "l")
+
+right_col <- plot_grid(
+  aligned[[1]], aligned[[2]], aligned[[3]],
+  ncol = 1,
+  rel_heights = c(1, 1, 2.5),
+  labels = c("B", "C", "D"),
+  label_size = 20,
+  label_fontface = "bold",
+  label_x = 0.01,  # left edge
+  label_y = 1
+)
+
+combined <- plot_grid(
+  p_a_labeled, right_col,
+  ncol = 2,
+  rel_widths = c(1, 1),
+  labels = c("A", ""),       # A on left; B/C/D already applied
+  label_size = 20,
+  label_fontface = "bold",
+  label_x = 0.01,
+  label_y = 1
+)
+
+print(combined)
+# combined
+ggsave("./results/Fig2_combined_2025-10-15.png", combined, width = 20, height = 30, dpi = 300)
+ggsave("./results/Fig2_combined_2025-10-15.pdf", combined, width = 20, height = 30)
+ggsave("./results/Fig2_combined_2025-10-15.svg", combined, width = 20, height = 30)
+
+
+```
+
+
+\newpage
+
+# Session Info
+
+```{r}
+sessionInfo()
+
+```
